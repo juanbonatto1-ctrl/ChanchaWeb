@@ -55,6 +55,12 @@ a:hover .ulink::after, a.ulink:hover::after { transform: scaleX(1); }
 .crest-dot { fill: var(--color-ink); }
 .crest-sash { fill: var(--color-rosa); }
 .crest-star { fill: var(--color-rosa); stroke: var(--color-ink); }
+img.crest { height: auto; }
+.crest--full { margin: 0; text-align: center; }
+.crest--full img { width: 100%; height: auto; }
+.crest--full figcaption { margin-top: var(--space-3); }
+.crest--full .crest-name { display: block; font-family: var(--font-display); font-weight: 600; font-size: clamp(1.15rem, 2.4vw, 1.5rem); letter-spacing: 0.08em; text-transform: uppercase; }
+.crest--full .crest-legend { display: block; font-family: var(--font-body); font-weight: 600; font-size: 0.625rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-ink-soft); margin-top: 2px; }
 .crest-name { font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.06em; fill: var(--color-ink); }
 .crest-legend { font-family: var(--font-body); font-weight: 600; font-size: 6px; letter-spacing: 0.14em; fill: var(--color-ink-soft); }
 .crest-fund { font-family: var(--font-data); font-weight: 600; font-size: 9px; letter-spacing: 0.16em; fill: var(--color-ink); }
@@ -513,6 +519,13 @@ img { display: block; max-width: 100%; height: auto; }
 .dlg input:focus, .dlg select:focus { outline: none; border-color: var(--color-rosa-ink); }
 .field label small { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .score-inputs { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--space-2); }
+.res-inputs { display: grid; grid-template-columns: 1fr auto 4.5rem; align-items: center; gap: var(--space-2); }
+.res-por { font-size: var(--fs-sm); color: var(--color-ink-soft); }
+.res-preview { font-family: var(--font-display); font-size: 1.125rem; padding: var(--space-3); background: var(--color-surface); border: var(--line) solid var(--color-line); border-radius: var(--radius); }
+.res-preview .label { margin-right: var(--space-2); }
+.res-preview strong { font-family: var(--font-data); font-size: 1.4rem; font-weight: 600; color: var(--color-rosa-ink); }
+.res-warn { display: block; font-family: var(--font-body); font-size: var(--fs-xs); color: var(--color-perdio); margin-top: var(--space-1); }
+.pf-table input:disabled { opacity: 0.4; }
 
 .pf-table { width: 100%; border-collapse: collapse; }
 .pf-table th { text-align: left; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-ink-soft); padding: var(--space-1) var(--space-1) var(--space-2); border-bottom: var(--line) solid var(--color-line-strong); }

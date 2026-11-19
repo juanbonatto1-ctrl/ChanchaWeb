@@ -109,8 +109,81 @@
   function res(p) { return p.gf > p.gc ? "G" : p.gf < p.gc ? "P" : "E"; }
   function jugado(p) { return p.gf != null && p.gc != null; }
 
+  /* ================= datos compartidos (Supabase) =================
+     Con js/config.js completo → partidos, notas, dorsales, premios y clips se guardan
+     en Supabase y los ve todo el grupo. Sin config → se guardan en este navegador. */
+  var CFG = window.CHANCHA_SUPABASE || {};
+  var ONLINE = !!(CFG.url && CFG.anonKey && window.supabase && window.supabase.createClient);
+  var sb = ONLINE ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
+  var REMOTE = { loaded: !ONLINE, error: null, uid: null, partidos: [], notas: {}, dorsales: {}, premios: [] };
+
+  function ensureSession() {
+    return sb.auth.getSession().then(function (r) {
+      if (r.data && r.data.session) return r.data.session.user;
+      return sb.auth.signInAnonymously().then(function (r2) {
+        if (r2.error) throw r2.error;
+        return r2.data.user;
+      });
+    });
+  }
+  function check(r) { if (r && r.error) throw r.error; return r; }
+  function friendly(e, dup) {
+    var m = (e && e.message) || String(e);
+    if (e && e.code === "23505") return dup || "Eso ya está cargado.";
+    if (/row-level security/i.test(m)) return "No podés cambiar eso: lo cargó otra persona.";
+    if (/anonymous/i.test(m)) return "Falta activar “Allow anonymous sign-ins” en Supabase (ver LEEME).";
+    if (/Failed to fetch|NetworkError/i.test(m)) return "Sin conexión. Probá de nuevo.";
+    return m;
+  }
+
+  function loadRemote() {
+    if (!ONLINE) return Promise.resolve();
+    return Promise.all([
+      sb.from("partidos").select("id,created_by,fecha,rival,torneo,gf,gc,titulares,suplentes,goles_suplentes"),
+      sb.from("notas").select("partido_id,votante,user_id,notas"),
+      sb.from("dorsales").select("nombre,dorsal,pos,user_id"),
+      sb.from("premios").select("id,created_by,titulo,ganador,detalle,created_at").order("created_at"),
+      sb.auth.getSession()
+    ]).then(function (r) {
+      for (var i = 0; i < 4; i++) check(r[i]);
+      var uid = r[4].data && r[4].data.session ? r[4].data.session.user.id : null;
+      REMOTE.uid = uid;
+      REMOTE.partidos = r[0].data.map(function (p) {
+        return {
+          id: p.id, fecha: p.fecha, rival: p.rival, torneo: p.torneo, gf: p.gf, gc: p.gc,
+          titulares: p.titulares || [], suplentes: p.suplentes || [], golesSuplentes: p.goles_suplentes || {},
+          local: !!uid && p.created_by === uid
+        };
+      });
+      REMOTE.notas = {};
+      r[1].data.forEach(function (n) {
+        (REMOTE.notas[n.partido_id] = REMOTE.notas[n.partido_id] || []).push({ votante: n.votante, notas: n.notas, mio: n.user_id === uid });
+      });
+      REMOTE.dorsales = {};
+      r[2].data.forEach(function (d) { REMOTE.dorsales[d.nombre] = { dorsal: d.dorsal, pos: d.pos, mio: d.user_id === uid }; });
+      REMOTE.premios = r[3].data.map(function (p) { return { id: p.id, titulo: p.titulo, ganador: p.ganador, detalle: p.detalle, mio: p.created_by === uid }; });
+      REMOTE.error = null;
+    }).catch(function (e) {
+      REMOTE.error = friendly(e);
+    }).then(function () { REMOTE.loaded = true; });
+  }
+
+  // Ejecuta una escritura en Supabase y recarga; devuelve un mensaje de error o nada.
+  function remoteWrite(fn, dup) {
+    return ensureSession().then(fn).then(check).then(function (r) {
+      return loadRemote().then(function () { return r; });
+    }).then(function () { return null; }, function (e) { return friendly(e, dup); });
+  }
+
+  function remoteNotice() {
+    if (!ONLINE) return "";
+    if (!REMOTE.loaded) return '<p class="notice">Cargando datos del grupo…</p>';
+    if (REMOTE.error) return '<p class="notice"><strong>No se pudieron cargar los datos del grupo.</strong> ' + esc(REMOTE.error) + "</p>";
+    return "";
+  }
+
   function getPlantel() {
-    var over = storeGet(K.dorsales, {});
+    var over = ONLINE ? REMOTE.dorsales : storeGet(K.dorsales, {});
     var base = (D.jugadores || []).slice();
     NOMBRES.forEach(function (n) {
       if (!base.some(function (j) { return j.nombre === n; })) base.push({ nombre: n, dorsal: null, pos: null });
@@ -122,8 +195,8 @@
   }
 
   function getPartidos() {
-    var locales = storeGet(K.partidos, []).map(function (p) { return Object.assign({}, p, { local: true }); });
-    var votosLoc = storeGet(K.votos, {});
+    var locales = ONLINE ? REMOTE.partidos : storeGet(K.partidos, []).map(function (p) { return Object.assign({}, p, { local: true }); });
+    var votosLoc = ONLINE ? REMOTE.notas : storeGet(K.votos, {});
     return (D.partidos || []).concat(locales).map(function (p) {
       var byVoter = {};
       (p.votos || []).forEach(function (v) { byVoter[v.votante] = v; });
@@ -148,6 +221,10 @@
         r.pj++; r.goles += t.goles || 0;
         if (t.nota != null) { r.sum += t.nota; r.n++; }
       });
+      Object.keys(m.golesSuplentes || {}).forEach(function (n) {
+        var r = by[n] || (by[n] = { nombre: n, pj: 0, goles: 0, sum: 0, n: 0 });
+        r.goles += m.golesSuplentes[n];
+      });
     });
     var lista = Object.keys(by).map(function (k) { var r = by[k]; r.prom = r.n ? r.sum / r.n : null; return r; });
     s.goleadores = lista.filter(function (r) { return r.goles > 0; }).sort(function (a, b) { return b.goles - a.goles || (b.prom || 0) - (a.prom || 0); });
@@ -169,37 +246,20 @@
 
   /* ================= escudo, copa y camiseta ================= */
   var uid = 0;
-  var SHIELD = "M12 8H108V66C108 100 86 121 60 132C34 121 12 100 12 66Z";
-  var STAR = "M60 -15L62.12 -8.91L68.56 -8.78L63.42 -4.89L65.29 1.28L60 -2.4L54.71 1.28L56.58 -4.89L51.44 -8.78L57.88 -8.91Z";
+  // Escudo oficial: img/escudo.png (grande) e img/escudo-sm.png (chico, para header, carnets y footer)
   function crest(full) {
-    var id = "crest-clip-" + (++uid);
-    var pig =
-      '<g stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' +
-        '<path class="crest-line" d="M42 92v8M50 93.5v8M64 93.5v8M72 91v8"/>' +
-        '<path class="crest-line" fill="none" d="M32 75c-5-3-9 2-5 4c3 1.5 3.5-3 .5-3"/>' +
-        '<ellipse class="crest-fill crest-line" cx="56" cy="78" rx="25" ry="16"/>' +
-        '<path class="crest-fill crest-line" d="M72 64l3.5-10l8 8z"/>' +
-        '<circle class="crest-fill crest-line" cx="80" cy="73" r="11"/>' +
-        '<rect class="crest-fill crest-line" x="88" y="68" width="8" height="10" rx="3"/>' +
-        '<circle class="crest-dot" cx="81" cy="70" r="1.7"/>' +
-      "</g>";
-    var body =
-      '<path class="crest-star" stroke-width="1.5" stroke-linejoin="round" d="' + STAR + '"/>' +
-      '<clipPath id="' + id + '"><path d="' + SHIELD + '"/></clipPath>' +
-      '<path class="crest-bg" d="' + SHIELD + '"/>' +
-      '<g clip-path="url(#' + id + ')"><path class="crest-sash" d="M-10 28L130 98V116L-10 46Z"/></g>' +
-      pig +
-      '<path class="crest-outline" fill="none" stroke-width="3.5" stroke-linejoin="round" d="' + SHIELD + '"/>';
-    if (!full) return '<svg class="crest" viewBox="0 -18 120 152" aria-hidden="true" focusable="false">' + body + "</svg>";
+    if (!full) return '<img class="crest" src="img/escudo-sm.png" alt="" width="93" height="128" decoding="async">';
     return (
-      '<svg class="crest crest--full" viewBox="0 -18 120 196" role="img" aria-label="Escudo del ' + esc(D.club.nombre) + ", con una estrella, fundado en " + D.club.fundacion + '">' +
-        body +
-        '<text class="crest-fund" x="60" y="28" text-anchor="middle">FUND. ' + D.club.fundacion + "</text>" +
-        '<text class="crest-name" x="60" y="157" text-anchor="middle">LA CHANCHA</text>' +
-        '<text class="crest-legend" x="60" y="172" text-anchor="middle">CLUB SOCIAL Y DEPORTIVO</text>' +
-      "</svg>"
+      '<figure class="crest crest--full">' +
+        '<img src="img/escudo.png" alt="Escudo del ' + esc(D.club.nombre) + ", fundado en " + D.club.fundacion + '" width="408" height="560" decoding="async">' +
+        '<figcaption><span class="crest-name">La Chancha</span><span class="crest-legend">Club Social y Deportivo</span></figcaption>' +
+      "</figure>"
     );
   }
+  var FUND_TXT = (function () {
+    var d = new Date((D.club.fechaFundacion || D.club.fundacion + "-01-01") + "T12:00:00");
+    return isNaN(d) ? String(D.club.fundacion) : d.toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" });
+  })();
 
   var BOWL = "M28 12H72V38C72 57 62 68 50 68C38 68 28 57 28 38Z";
   function copa() {
@@ -303,7 +363,7 @@
     }).join("") + "</dl>";
   }
   var EJ = '<span class="badge badge--ejemplo">Ejemplo</span>';
-  var LOCAL = '<span class="badge badge--local">Este dispositivo</span>';
+  var LOCAL = '<span class="badge badge--local">' + (ONLINE ? "Lo cargaste vos" : "Este dispositivo") + "</span>";
 
   var MEDAL = { 1: "Oro", 2: "Plata", 3: "Bronce" };
   function honor() {
@@ -332,7 +392,7 @@
         "<div>" +
           '<p class="label">Fund. ' + D.club.fundacion + " · Temporada " + D.club.temporada + "</p>" +
           "<h1>Club Social y Deportivo <em>La Chancha</em></h1>" +
-          '<p class="lead">Secretaría del club. Padrón de socios, asistencia a las juntadas, el fútbol y los Chancha Awards.</p>' +
+          '<p class="lead">Fundado el ' + FUND_TXT + ". Padrón de socios, asistencia a las juntadas, el fútbol y los Chancha Awards.</p>" +
         "</div>" +
       "</div>" +
       '<div class="reveal">' + stats([
@@ -528,7 +588,8 @@
 
   function matchCard(m) {
     var ok = jugado(m);
-    var goleadores = m.titulares.filter(function (t) { return t.goles; }).map(function (t) { return esc(t.j) + (t.goles > 1 ? " (" + t.goles + ")" : ""); });
+    var goleadores = m.titulares.filter(function (t) { return t.goles; }).map(function (t) { return esc(t.j) + (t.goles > 1 ? " (" + t.goles + ")" : ""); })
+      .concat(Object.keys(m.golesSuplentes || {}).map(function (n) { var g = m.golesSuplentes[n]; return esc(n) + (g > 1 ? " (" + g + ")" : "") + " · entró"; }));
     var best = figuraDe(m);
     var lista = m.titulares.slice().sort(function (a, b) { return ORDEN.indexOf(b.pos) - ORDEN.indexOf(a.pos); }).map(function (t) {
       var d = dorsalOf(t.j);
@@ -644,6 +705,7 @@
 
     return (
       pageHero("Temporada " + D.club.temporada, "Fútbol", "El partido de la semana, las notas que se ponen entre ustedes, las estadísticas, el plantel y la copa.") +
+      remoteNotice() +
       section(1, "Partido de la semana",
         notice + (actual ? partidoBlock(actual)
           : '<div class="empty"><p class="empty-title">Sin partido cargado</p><p>Agregá el partido del finde con el botón de arriba.</p></div>'),
@@ -686,25 +748,9 @@
     );
   }
 
-  /* ----- Clips: almacenamiento -----
-     Con js/config.js completo → Supabase (compartido con todo el grupo).
-     Sin config → modo de prueba en este navegador. */
-  var CFG = window.CHANCHA_SUPABASE || {};
-  var ONLINE = !!(CFG.url && CFG.anonKey && window.supabase && window.supabase.createClient);
-  var sb = ONLINE ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
+  /* ----- Clips: almacenamiento (la conexión a Supabase está arriba, en "datos compartidos") ----- */
   var MAX_VIDEO_MB = 50;
   var clipsState = { loading: true, list: [], error: null };
-
-  function ensureSession() {
-    return sb.auth.getSession().then(function (r) {
-      if (r.data && r.data.session) return r.data.session.user;
-      return sb.auth.signInAnonymously().then(function (r2) {
-        if (r2.error) throw r2.error;
-        return r2.data.user;
-      });
-    });
-  }
-  function check(r) { if (r && r.error) throw r.error; return r; }
 
   var ClipStore = ONLINE ? {
     list: function () {
@@ -885,7 +931,11 @@
       figura && { title: "Figura del año", winner: esc(figura.nombre), detail: "Mejor promedio de nota puesta por los demás: " + nota1(figura.prom) + ".", ejemplo: F.hayEjemplo }
     ].filter(Boolean);
     (D.premios || []).forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || "") }); });
-    storeGet(K.premios, []).forEach(function (p, i) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: i }); });
+    if (ONLINE) {
+      REMOTE.premios.forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: p.mio ? 0 : null, pid: p.id }); });
+    } else {
+      storeGet(K.premios, []).forEach(function (p, i) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: i }); });
+    }
 
     var cards = '<div class="premios">' + cats.map(function (c) {
       var isLocal = c.local != null;
@@ -896,7 +946,7 @@
           '<p class="premio-winner">' + c.winner + "</p>" +
           (c.detail ? '<p class="premio-detail">' + c.detail + "</p>" : "") +
           (c.href ? '<a class="more ulink" href="' + c.href + '">Ver y votar →</a>' : "") +
-          (isLocal ? '<button type="button" class="link-btn link-btn--muted premio-quitar" data-action="quitar-premio" data-i="' + c.local + '">Quitar</button>' : "") +
+          (isLocal ? '<button type="button" class="link-btn link-btn--muted premio-quitar" data-action="quitar-premio" data-i="' + c.local + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Quitar</button>" : "") +
         "</article>"
       );
     }).join("") + "</div>";
@@ -928,6 +978,7 @@
 
     return (
       pageHero("Edición " + D.club.temporada, "Chancha <em>Awards</em>", "Los premios de la temporada. Este año se estrena la categoría Clip del año.") +
+      remoteNotice() +
       section(1, "Categorías " + D.club.temporada, cards, addBtn("premio", "Agregar premio"), "categorias") +
       section(2, "Clip del año", form + '<div id="clips-grid" class="clips clips--vote"></div>', '<span class="label" id="clips-count"></span>', "clip") +
       section(3, "Ediciones anteriores", historial, asideLabel("Historial")) +
@@ -979,7 +1030,7 @@
         '<tr><td class="pf-name">' + esc(j.nombre) + "</td>" +
         '<td><select name="estado-' + i + '" aria-label="' + esc(j.nombre) + ': participación">' + options([{ v: "", l: "No juega" }, { v: "T", l: "Titular" }, { v: "S", l: "Suplente" }], "") + "</select></td>" +
         '<td><select name="pos-' + i + '" aria-label="' + esc(j.nombre) + ': posición">' + options(POS, j.pos || "MED") + "</select></td>" +
-        '<td><input name="goles-' + i + '" type="number" min="0" max="30" inputmode="numeric" placeholder="0" aria-label="' + esc(j.nombre) + ': goles"></td></tr>'
+        '<td><input name="goles-' + i + '" type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="0" disabled aria-label="' + esc(j.nombre) + ': goles"></td></tr>'
       );
     }).join("");
     var body =
@@ -987,37 +1038,83 @@
         '<div class="field"><label for="p-fecha">Fecha</label><input id="p-fecha" name="fecha" type="date" value="' + hoy() + '" required></div>' +
         '<div class="field"><label for="p-rival">Rival</label><input id="p-rival" name="rival" maxlength="40" required></div>' +
         '<div class="field"><label for="p-torneo">Torneo</label><input id="p-torneo" name="torneo" maxlength="40" value="Amistoso"></div>' +
-        '<div class="field field--score"><label>Resultado <small>(vacío si no se jugó)</small></label><div class="score-inputs">' +
-          '<input name="gf" type="number" min="0" inputmode="numeric" aria-label="Goles de La Chancha" placeholder="Chancha">' +
-          '<span>–</span><input name="gc" type="number" min="0" inputmode="numeric" aria-label="Goles del rival" placeholder="Rival"></div></div>' +
+        '<div class="field"><label for="p-res">¿Cómo salió?</label><div class="res-inputs">' +
+          '<select id="p-res" name="res">' + options([{ v: "", l: "No se jugó todavía" }, { v: "G", l: "Ganamos" }, { v: "E", l: "Empatamos" }, { v: "P", l: "Perdimos" }], "") + "</select>" +
+          '<label class="res-por" for="p-por">por</label><input id="p-por" name="por" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="1" aria-label="Diferencia de goles" disabled></div></div>' +
       "</div>" +
-      '<p class="label dlg-sub">Quiénes jugaron</p>' +
-      '<div class="table-wrap"><table class="pf-table"><thead><tr><th>Jugador</th><th>Juega</th><th>Pos.</th><th>Goles</th></tr></thead><tbody>' + filas + "</tbody></table></div>";
+      '<p class="label dlg-sub">Quiénes jugaron y quién hizo los goles</p>' +
+      '<div class="table-wrap"><table class="pf-table"><thead><tr><th>Jugador</th><th>Juega</th><th>Pos.</th><th>Goles</th></tr></thead><tbody>' + filas + "</tbody></table></div>" +
+      '<p class="res-preview" id="p-preview" aria-live="polite"></p>' +
+      '<p class="form-note">Los goles de La Chancha son la suma de los goles de cada jugador. Con “ganamos / perdimos por” se calculan los del rival.</p>';
 
-    openDialog("Agregar partido", body, "Guardar partido", function (f) {
-      var rival = f.rival.value.trim(), fch = f.fecha.value;
-      if (!fch) return "Poné la fecha.";
-      if (!rival) return "Poné el rival.";
-      var gf = numOrNull(f.gf.value), gc = numOrNull(f.gc.value);
-      if ((gf === null) !== (gc === null)) return "Completá los dos goles o dejá los dos vacíos.";
-      if ((gf !== null && (isNaN(gf) || gf < 0 || gf % 1)) || (gc !== null && (isNaN(gc) || gc < 0 || gc % 1))) return "Los goles tienen que ser números enteros.";
-      var tit = [], sup = [], sumGoles = 0;
+    function leer(f) {
+      var tit = [], sup = [], golesSup = {}, sumGoles = 0, err = null;
       F.plantel.forEach(function (j, i) {
         var est = f["estado-" + i].value;
         var g = numOrNull(f["goles-" + i].value) || 0;
+        if (est && (isNaN(g) || g < 0 || g % 1)) { err = "Los goles de " + j.nombre + " tienen que ser un número entero."; return; }
         if (est === "T") { tit.push({ j: j.nombre, pos: f["pos-" + i].value, goles: g || undefined }); sumGoles += g; }
-        else if (est === "S") sup.push(j.nombre);
+        else if (est === "S") { sup.push(j.nombre); if (g) { golesSup[j.nombre] = g; sumGoles += g; } }
       });
-      if (!tit.length) return "Marcá al menos un titular.";
-      if (tit.length > 11) return "Hay más de 11 titulares.";
-      if (gf === null && sumGoles) return "Si el partido no se jugó, no puede haber goles.";
-      if (gf !== null && sumGoles > gf) return "Los goles de los jugadores (" + sumGoles + ") superan el resultado (" + gf + ").";
+      var res = f.res.value, por = numOrNull(f.por.value), gf = null, gc = null;
+      if (res) {
+        gf = sumGoles;
+        if (res === "E") gc = gf;
+        else if (por === null || isNaN(por) || por < 1 || por % 1) err = err || "Poné por cuántos goles " + (res === "G" ? "ganaron" : "perdieron") + ".";
+        else if (res === "G") { gc = gf - por; if (gc < 0) { gc = null; err = err || "Para ganar por " + por + " hacen falta al menos " + por + " goles cargados a los jugadores (hay " + gf + ")."; } }
+        else gc = gf + por;
+      }
+      return { tit: tit, sup: sup, golesSup: golesSup, sumGoles: sumGoles, res: res, gf: gf, gc: gc, err: err };
+    }
+
+    var form = openDialog("Agregar partido", body, "Guardar partido", function (f) {
+      var rival = f.rival.value.trim(), fch = f.fecha.value;
+      if (!fch) return "Poné la fecha.";
+      if (!rival) return "Poné el rival.";
+      var r = leer(f);
+      if (r.err) return r.err;
+      if (!r.tit.length) return "Marcá al menos un titular.";
+      if (r.tit.length > 11) return "Hay más de 11 titulares.";
+      if (!r.res && r.sumGoles) return "Si el partido no se jugó, no puede haber goles.";
+      if (ONLINE) {
+        var nuevoId = null;
+        return remoteWrite(function () {
+          return sb.from("partidos").insert({
+            fecha: fch, rival: rival, torneo: f.torneo.value.trim() || "Amistoso", gf: r.gf, gc: r.gc,
+            titulares: r.tit.map(function (t) { var o = { j: t.j, pos: t.pos }; if (t.goles) o.goles = t.goles; return o; }),
+            suplentes: r.sup, goles_suplentes: r.golesSup
+          }).select("id").single().then(function (res) { if (res.data) nuevoId = res.data.id; return res; });
+        }).then(function (err) { if (!err) verId = nuevoId; return err; });
+      }
       var list = storeGet(K.partidos, []);
       var id = "l" + Date.now();
-      list.push({ id: id, fecha: fch, rival: rival, torneo: f.torneo.value.trim() || "Amistoso", gf: gf, gc: gc, titulares: tit, suplentes: sup });
+      var p = { id: id, fecha: fch, rival: rival, torneo: f.torneo.value.trim() || "Amistoso", gf: r.gf, gc: r.gc, titulares: r.tit, suplentes: r.sup };
+      if (Object.keys(r.golesSup).length) p.golesSuplentes = r.golesSup;
+      list.push(p);
       if (!storeSet(K.partidos, list)) return "No se pudo guardar en este navegador.";
       verId = id;
     });
+
+    var preview = document.getElementById("p-preview");
+    function sync() {
+      var res = form.res.value;
+      form.por.disabled = !res || res === "E";
+      if (form.por.disabled) form.por.value = "";
+      F.plantel.forEach(function (j, i) {
+        var inp = form["goles-" + i];
+        inp.disabled = !form["estado-" + i].value || !res;
+        if (inp.disabled) inp.value = "";
+      });
+      var r = leer(form), rival = form.rival.value.trim() || "Rival";
+      if (!res) preview.innerHTML = '<span class="label">Próximo partido</span> La Chancha vs ' + esc(rival);
+      else if (r.gc === null) preview.innerHTML = '<span class="label">Resultado</span> La Chancha ' + r.gf + " – ? " + esc(rival) +
+        (r.err ? ' <span class="res-warn">' + esc(r.err) + "</span>" : "");
+      else preview.innerHTML = '<span class="label">Resultado</span> La Chancha <strong>' + r.gf + " – " + r.gc + "</strong> " + esc(rival) +
+        (r.err ? ' <span class="res-warn">' + esc(r.err) + "</span>" : "");
+    }
+    form.addEventListener("input", sync);
+    form.addEventListener("change", sync);
+    sync();
   }
 
   function dialogNota(id) {
@@ -1054,6 +1151,14 @@
       });
       if (error) return error;
       if (!n) return "Poné al menos una nota.";
+      if (ONLINE) {
+        return remoteWrite(function () {
+          return sb.from("notas").upsert({ partido_id: m.id, votante: votante, notas: notas }, { onConflict: "partido_id,votante" });
+        }, "Desde este celular ya votaste en este partido con otro nombre.").then(function (err) {
+          if (!err) verId = m.id;
+          return err && /otra persona/.test(err) ? votante + " ya votó desde otro celular." : err;
+        });
+      }
       var all = storeGet(K.votos, {});
       var arr = (all[m.id] || []).filter(function (v) { return v.votante !== votante; });
       arr.push({ votante: votante, notas: notas });
@@ -1097,6 +1202,13 @@
       if (num === null || isNaN(num) || num % 1 || num < 1 || num > 99) return "El número tiene que ser entero, del 1 al 99.";
       var duenio = F.plantel.filter(function (j) { return j.dorsal === num && j.nombre !== who; })[0];
       if (duenio) return "El " + num + " ya lo tiene " + duenio.nombre + ". Elegí otro.";
+      if (ONLINE) {
+        return remoteWrite(function () {
+          return sb.from("dorsales").upsert({ nombre: who, dorsal: num, pos: f.pos.value || null }, { onConflict: "nombre" });
+        }, "El " + num + " ya lo eligió otro jugador.").then(function (err) {
+          return err && /otra persona/.test(err) ? "El número de " + who + " lo eligió otra persona desde su celular; solo esa persona lo puede cambiar." : err;
+        });
+      }
       var over = storeGet(K.dorsales, {});
       over[who] = { dorsal: num, pos: f.pos.value || null };
       if (!storeSet(K.dorsales, over)) return "No se pudo guardar en este navegador.";
@@ -1135,6 +1247,11 @@
       var t = f.titulo.value.trim(), g = f.ganador.value.trim();
       if (!t) return "Poné el nombre de la categoría.";
       if (!g) return "Poné quién lo ganó.";
+      if (ONLINE) {
+        return remoteWrite(function () {
+          return sb.from("premios").insert({ titulo: t, ganador: g, detalle: f.detalle.value.trim() || null });
+        });
+      }
       var list = storeGet(K.premios, []);
       list.push({ titulo: t, ganador: g, detalle: f.detalle.value.trim() });
       if (!storeSet(K.premios, list)) return "No se pudo guardar en este navegador.";
@@ -1246,12 +1363,23 @@
       verId = id; render();
       document.getElementById("partido").scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (a === "quitar-partido") {
-      if (!confirm("¿Quitar este partido de este dispositivo?")) return;
+      if (!confirm("¿Quitar este partido? Se borran también sus notas.")) return;
+      if (verId === id) verId = null;
+      if (ONLINE) {
+        remoteWrite(function () { return sb.from("partidos").delete().eq("id", id); }).then(function (err) { if (err) alert(err); render(); });
+        return;
+      }
       storeSet(K.partidos, storeGet(K.partidos, []).filter(function (p) { return p.id !== id; }));
       var votos = storeGet(K.votos, {}); delete votos[id]; storeSet(K.votos, votos);
-      if (verId === id) verId = null;
       render();
-    } else if (a === "quitar-premio") quitar(K.premios, +b.getAttribute("data-i"));
+    } else if (a === "quitar-premio") {
+      if (!confirm("¿Quitar este premio?")) return;
+      if (ONLINE) {
+        remoteWrite(function () { return sb.from("premios").delete().eq("id", id); }).then(function (err) { if (err) alert(err); render(); });
+        return;
+      }
+      quitar(K.premios, +b.getAttribute("data-i"));
+    }
     else if (a === "votar") votar(id, +b.getAttribute("data-v"));
     else if (a === "quitar-clip") {
       var clip = clipsState.list.filter(function (x) { return x.id === id; })[0];
@@ -1303,6 +1431,7 @@
   main = document.getElementById("main");
   render(true);
   document.getElementById("footer").outerHTML = footer();
+  if (ONLINE && (page === "futbol" || page === "awards")) loadRemote().then(function () { render(); });
 
   /* fade al entrar */
   var els = main.querySelectorAll(".reveal");

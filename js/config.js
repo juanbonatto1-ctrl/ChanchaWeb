@@ -1,4 +1,4 @@
-/* Conexión con Supabase para los clips y los votos del Clip del año.
+/* Conexión con Supabase: partidos, notas, dorsales, premios, clips y votos.
    Completá con los datos de tu proyecto: Supabase → Project Settings → API.
    - url:     "Project URL"            (ej. https://abcdefgh.supabase.co)
    - anonKey: clave "anon" / "publishable" (es pública, va en la web sin problema)

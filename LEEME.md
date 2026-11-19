@@ -10,18 +10,21 @@ node serve.js
 
 Abrí http://localhost:5500
 
-## Publicarla (Netlify)
+## Publicarla (Vercel)
 
-1. Netlify → **Add new site → Deploy manually**.
-2. Arrastrá la carpeta del sitio (o el zip descomprimido). No hay comando de build; la carpeta a publicar es la raíz.
-3. Es un sitio aparte de Evas Deco.
+1. Vercel → **Add New → Project** e importá esta carpeta (desde GitHub o con `vercel` desde la terminal).
+2. Framework: **Other**. No hay comando de build y el directorio de salida es la raíz (`.`).
+3. Es un proyecto aparte de Evas Deco.
 
-## Clip del año: clips y votos compartidos (Supabase)
+## Datos compartidos (Supabase)
 
-Sin este paso, los clips y los votos funcionan en **modo de prueba** (solo en tu navegador).
+Partidos, notas, dorsales, premios, clips y votos se guardan en Supabase y los ve todo el grupo.
+Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en su navegador).
 
 1. **Proyecto:** en supabase.com abrí el proyecto que quieras usar para La Chancha (o creá uno nuevo).
-2. **Tablas y permisos:** SQL Editor → New query → pegá todo `supabase/clips.sql` → **Run**.
+2. **Tablas y permisos:** en SQL Editor → New query, corré estos dos archivos, cada uno entero → **Run**:
+   - `supabase/clips.sql`: clips y votos del Clip del año.
+   - `supabase/futbol_premios.sql`: partidos, notas, dorsales y premios.
 3. **Login sin cuenta:** Authentication → Sign In / Providers → activá **Allow anonymous sign-ins**.
    Cada celular queda identificado solo, sin mail ni contraseña.
 4. **Claves:** Project Settings → API (o "API Keys"). Copiá:
@@ -37,9 +40,15 @@ Sin este paso, los clips y los votos funcionan en **modo de prueba** (solo en tu
    ```
 
    ⚠️ Nunca pongas la clave **service_role / secret**.
-6. Volvé a subir la web a Netlify. En Chancha Awards va a desaparecer el aviso de "Modo de prueba".
+6. Volvé a publicar la web en Vercel. En Chancha Awards va a desaparecer el aviso de "Modo de prueba".
 
-### Cómo funciona la votación
+### Quién puede cambiar qué
+
+- **Partidos y premios:** cualquiera los carga. Solo los puede quitar quien los cargó, desde su celular.
+- **Notas:** cada uno elige su nombre y vota una vez por partido desde su celular. Puede cambiar su voto, pero nadie se pone nota a sí mismo.
+- **Dorsales:** no se repiten. El número de cada jugador solo lo puede cambiar el celular que lo eligió.
+
+### Cómo funciona la votación de clips
 
 - Cada uno sube un clip con un link (YouTube, Instagram, TikTok, Drive) o el video directo (hasta 50 MB).
 - ▲ suma un punto y ▼ resta uno. Tocar la misma flecha de nuevo saca el voto.
