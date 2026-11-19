@@ -44,9 +44,13 @@
   /* ================= asistencia (juntadas) ================= */
   // El archivo js/asistencia.js es lo publicado. Si el admin cargó cambios en este
   // navegador más nuevos que el archivo, se usan esos (hasta que publique el archivo nuevo).
+  // Con Supabase (js/config.js completo) la asistencia se lee y se guarda en la base
+  // y la ve todo el grupo al instante; el archivo queda solo como respaldo.
   var A, TOTAL, UMBRAL, socios, ranking, titularesJuntadas, sumAsist, promedio, minTitular, NOMBRES, cambiosSinPublicar;
+  var REMOTE_A = null, REMOTE_A_ERROR = null;
 
   function getA() {
+    if (ONLINE) return REMOTE_A || FILE_A;
     var loc = storeGet(K.asistencia, null);
     if (loc && loc.actualizado && loc.actualizado > (FILE_A.actualizado || "")) return loc;
     return FILE_A;
@@ -57,11 +61,55 @@
     return storeSet(K.asistencia, obj);
   }
   function isAdmin() { try { return sessionStorage.getItem(K.admin) === "1"; } catch (e) { return false; } }
-  function setAdmin(on) { try { if (on) sessionStorage.setItem(K.admin, "1"); else sessionStorage.removeItem(K.admin); } catch (e) {} }
+  function setAdmin(on, pin) {
+    try {
+      if (on) { sessionStorage.setItem(K.admin, "1"); if (pin) sessionStorage.setItem(K.admin + ".pin", pin); }
+      else { sessionStorage.removeItem(K.admin); sessionStorage.removeItem(K.admin + ".pin"); }
+    } catch (e) {}
+  }
+  function adminPin() { try { return sessionStorage.getItem(K.admin + ".pin") || ""; } catch (e) { return ""; } }
+
+  function loadAsistRemote() {
+    if (!ONLINE) return Promise.resolve();
+    return Promise.all([
+      sb.from("asistencia_config").select("juntadas_base,umbral,fuente").eq("id", 1).maybeSingle(),
+      sb.from("socios").select("nombre,orden,asistencias_base").order("orden"),
+      sb.from("juntadas").select("id,fecha,nombre,created_at,juntada_presentes(socio)").order("fecha")
+    ]).then(function (r) {
+      r.forEach(check);
+      var cfg = r[0].data || { juntadas_base: 0, umbral: 0.7, fuente: "Supabase" };
+      var base = {};
+      r[1].data.forEach(function (s) { base[s.nombre] = s.asistencias_base; });
+      REMOTE_A = {
+        fuente: cfg.fuente,
+        umbralTitular: Number(cfg.umbral),
+        socios: r[1].data.map(function (s) { return s.nombre; }),
+        base: { juntadas: cfg.juntadas_base, asistencias: base },
+        juntadas: r[2].data.map(function (j) {
+          return { id: j.id, fecha: j.fecha, nombre: j.nombre || "", creado: j.created_at, presentes: (j.juntada_presentes || []).map(function (p) { return p.socio; }) };
+        })
+      };
+      REMOTE_A_ERROR = null;
+    }).catch(function (e) { REMOTE_A_ERROR = friendly(e); });
+  }
+
+  // Llama a una función admin_* de Supabase con el PIN; devuelve un mensaje de error o nada.
+  function adminRpc(fn, args) {
+    args.p_pin = adminPin();
+    return sb.rpc(fn, args).then(function (r) {
+      check(r);
+      if (!r.data || !r.data.ok) {
+        var msg = (r.data && r.data.error) || "No se pudo guardar.";
+        if (/PIN|intentos/.test(msg)) setAdmin(false);
+        return msg;
+      }
+      return loadAsistRemote().then(function () { return null; });
+    }).catch(function (e) { return friendly(e); });
+  }
 
   function refreshA() {
     A = getA();
-    cambiosSinPublicar = A !== FILE_A;
+    cambiosSinPublicar = !ONLINE && A !== FILE_A;
     UMBRAL = A.umbralTitular;
     var js = A.juntadas || [];
     TOTAL = A.base.juntadas + js.length;
@@ -325,7 +373,7 @@
 
   function footer() {
     return (
-      '<footer class="site-footer">' +
+      '<footer class="site-footer" id="footer">' +
         '<div class="band" aria-hidden="true"></div>' +
         '<div class="wrap footer-inner">' +
           '<div class="footer-brand">' + crest() +
@@ -478,20 +526,29 @@
   var LOCK = '<svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none"/></svg>';
 
   function adminBar() {
+    var estado = ONLINE
+      ? (REMOTE_A_ERROR ? '<p class="notice"><strong>No se pudo conectar con la base.</strong> ' + esc(REMOTE_A_ERROR) + "</p>" : "")
+      : "";
     if (!isAdmin()) {
-      return '<p class="admin-entry"><button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Entrar como admin</button></p>";
+      return estado + '<p class="admin-entry"><button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Entrar como admin</button></p>";
     }
+    var nota = ONLINE
+      ? '<p class="form-note">Conectado a la base: lo que cargues lo ve todo el grupo al instante.</p>'
+      : cambiosSinPublicar
+        ? '<p class="notice"><strong>Esto todavía no lo ve el grupo.</strong> La web no está conectada a la base de datos, así que lo que cargás queda solo en este navegador. ' +
+          'Para que se guarde para todos automáticamente, corré <code>supabase/asistencia_admin.sql</code> y completá <code>js/config.js</code> (ver LEEME). ' +
+          'Mientras tanto podés descargar <code>asistencia.js</code> y subirlo al sitio a mano.</p>'
+        : '<p class="form-note">La web no está conectada a la base de datos: lo que cargues queda en este navegador hasta que la conectes (ver LEEME).</p>';
     return (
+      estado +
       '<div class="admin-bar reveal">' +
         '<div class="admin-bar-head"><p class="label">' + LOCK + ' Modo admin</p><button type="button" class="link-btn link-btn--muted" data-action="salir">Salir</button></div>' +
         '<div class="admin-actions">' +
           '<button type="button" class="btn" data-action="juntada">Registrar juntada</button>' +
           '<button type="button" class="btn btn--ghost" data-action="socio">Agregar socio</button>' +
-          '<button type="button" class="btn btn--ghost" data-action="descargar">Descargar asistencia.js</button>' +
+          (ONLINE ? "" : '<button type="button" class="btn btn--ghost" data-action="descargar">Descargar asistencia.js</button>') +
         "</div>" +
-        (cambiosSinPublicar
-          ? '<p class="notice"><strong>Tenés cambios sin publicar.</strong> Por ahora solo se ven en este navegador. Descargá <code>asistencia.js</code> y reemplazá el archivo <code>js/asistencia.js</code> del sitio para que lo vea todo el grupo.</p>'
-          : '<p class="form-note">Todo publicado. Lo que cargues se guarda primero en este navegador.</p>') +
+        nota +
       "</div>"
     );
   }
@@ -1260,6 +1317,20 @@
 
   /* ----- admin de asistencia ----- */
   function dialogAdmin() {
+    if (ONLINE) {
+      openDialog("Entrar como admin",
+        '<div class="field"><label for="a-pin">PIN de admin</label><input id="a-pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required></div>',
+        "Entrar", function (f) {
+          var pin = f.pin.value.trim();
+          if (!pin) return "Poné el PIN.";
+          return sb.rpc("admin_entrar", { p_pin: pin }).then(function (r) {
+            check(r);
+            if (!r.data || !r.data.ok) return (r.data && r.data.error) || "PIN incorrecto.";
+            setAdmin(true, pin);
+          }).catch(function (e) { return friendly(e); });
+        }, "El PIN lo verifica la base. Después de 10 intentos fallidos se bloquea 15 minutos.");
+      return;
+    }
     var crear = !A.adminPinHash;
     var body = crear
       ? '<p class="dlg-context">Creá tu PIN de admin</p>' +
@@ -1300,11 +1371,12 @@
       if (!f.fecha.value) return "Poné la fecha.";
       var presentes = Array.prototype.filter.call(f.querySelectorAll('input[name="p"]'), function (c) { return c.checked; }).map(function (c) { return c.value; });
       if (!presentes.length) return "Marcá al menos a uno que haya venido.";
+      if (ONLINE) return adminRpc("admin_registrar_juntada", { p_fecha: f.fecha.value, p_nombre: f.nombre.value.trim(), p_presentes: presentes });
       var obj = cloneA();
       obj.juntadas = obj.juntadas || [];
       obj.juntadas.push({ id: "j" + Date.now(), fecha: f.fecha.value, nombre: f.nombre.value.trim(), presentes: presentes });
       if (!saveA(obj)) return "No se pudo guardar en este navegador.";
-    }, "Después descargá <code>asistencia.js</code> para publicarlo.");
+    }, ONLINE ? "Se guarda para todo el grupo." : "Sin base de datos conectada: queda en este navegador.");
     var boxes = form.querySelectorAll('input[name="p"]');
     var count = document.getElementById("j-count");
     function upd() { count.textContent = plural(Array.prototype.filter.call(boxes, function (c) { return c.checked; }).length, "presente", "presentes"); }
@@ -1325,10 +1397,11 @@
       var n = f.nombre.value.trim();
       if (!n) return "Poné el nombre.";
       if (A.socios.some(function (s) { return s.toLowerCase() === n.toLowerCase(); })) return n + " ya es socio.";
+      if (ONLINE) return adminRpc("admin_agregar_socio", { p_nombre: n });
       var obj = cloneA();
       obj.socios.push(n);
       if (!saveA(obj)) return "No se pudo guardar en este navegador.";
-    }, "Después descargá <code>asistencia.js</code> para publicarlo.");
+    }, ONLINE ? "Se guarda para todo el grupo." : "Sin base de datos conectada: queda en este navegador.");
   }
 
   function quitar(key, i) {
@@ -1354,6 +1427,10 @@
     else if (a === "descargar" && isAdmin()) descargarAsistencia();
     else if (a === "quitar-juntada" && isAdmin()) {
       if (!confirm("¿Quitar esta juntada?")) return;
+      if (ONLINE) {
+        adminRpc("admin_quitar_juntada", { p_id: id }).then(function (err) { if (err) alert(err); render(); });
+        return;
+      }
       var objA = cloneA();
       objA.juntadas = (objA.juntadas || []).filter(function (j) { return j.id !== id; });
       saveA(objA);
@@ -1431,7 +1508,12 @@
   main = document.getElementById("main");
   render(true);
   document.getElementById("footer").outerHTML = footer();
-  if (ONLINE && (page === "futbol" || page === "awards")) loadRemote().then(function () { render(); });
+  if (ONLINE) {
+    Promise.all([loadAsistRemote(), page === "futbol" || page === "awards" ? loadRemote() : null]).then(function () {
+      render();
+      document.getElementById("footer").outerHTML = footer();
+    });
+  }
 
   /* fade al entrar */
   var els = main.querySelectorAll(".reveal");

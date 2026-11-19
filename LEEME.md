@@ -22,7 +22,8 @@ Partidos, notas, dorsales, premios, clips y votos se guardan en Supabase y los v
 Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en su navegador).
 
 1. **Proyecto:** en supabase.com abrí el proyecto que quieras usar para La Chancha (o creá uno nuevo).
-2. **Tablas y permisos:** en SQL Editor → New query, corré estos dos archivos, cada uno entero → **Run**:
+2. **Tablas y permisos:** en SQL Editor → New query, corré estos archivos, cada uno entero → **Run**:
+   - `supabase/asistencia_admin.sql`: asistencia a juntadas y admin con tu PIN (6767).
    - `supabase/clips.sql`: clips y votos del Clip del año.
    - `supabase/futbol_premios.sql`: partidos, notas, dorsales y premios.
 3. **Login sin cuenta:** Authentication → Sign In / Providers → activá **Allow anonymous sign-ins**.
@@ -61,8 +62,11 @@ Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en
 
 ## Asistencia (solo el admin)
 
-Asistencia → **Entrar como admin** (la primera vez creás el PIN) → **Registrar juntada** → **Descargar asistencia.js**.
-Reemplazá `js/asistencia.js` con el descargado y volvé a publicar.
+Asistencia → **Entrar como admin** (PIN 6767) → **Registrar juntada** o **Agregar socio**.
+
+- **Con la base conectada:** se guarda al instante y lo ve todo el grupo. El PIN lo verifica Supabase y después de 10 intentos fallidos se bloquea 15 minutos.
+  Para cambiar el PIN, editá el número al final de `asistencia_admin.sql` y volvé a correrlo.
+- **Sin la base:** queda en tu navegador. Podés usar **Descargar asistencia.js**, reemplazar `js/asistencia.js` y volver a publicar.
 
 ## Archivos
 
