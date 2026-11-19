@@ -4,7 +4,7 @@
 window.CHANCHA_ASISTENCIA = {
   "fuente": "Chancha2026",
   "actualizado": "",
-  "adminPinHash": null,
+  "adminPinHash": "fd87c2dfba5fcfd9612eb02f82a353806d95f7f7561b6a312760bede0ac041e7",
   "umbralTitular": 0.7,
   "socios": ["Mateo", "Sexo7", "Nahuel", "Paty", "Ama", "Puebla", "Moyano", "Utri", "Santi", "Gordo", "Luquinho", "ChancaD10s", "Agus"],
   "base": {
