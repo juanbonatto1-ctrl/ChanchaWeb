@@ -1,0 +1,10 @@
+/* Conexión con Supabase para los clips y los votos del Clip del año.
+   Completá con los datos de tu proyecto: Supabase → Project Settings → API.
+   - url:     "Project URL"            (ej. https://abcdefgh.supabase.co)
+   - anonKey: clave "anon" / "publishable" (es pública, va en la web sin problema)
+   NUNCA pongas acá la clave "service_role" / "secret".
+   Si los dejás vacíos, la sección de clips funciona en modo de prueba (solo en tu navegador). */
+window.CHANCHA_SUPABASE = {
+  url: "",
+  anonKey: ""
+};

@@ -1,0 +1,63 @@
+/* ==========================================================
+   La Chancha — Design tokens
+   Estilo actual: "Club Social Minimalista"
+   Para probar otro estilo, cambiá solo este archivo.
+   ========================================================== */
+
+:root {
+  /* — Color — */
+  --color-bg:          #F7F3EE;  /* crema / hueso */
+  --color-surface:     #FCFAF7;  /* tarjetas */
+  --color-ink:         #221B18;  /* casi negro cálido */
+  --color-ink-soft:    #6B615B;  /* textos secundarios */
+  --color-line:        #DDD4CA;  /* separadores finos */
+  --color-line-strong: #221B18;
+
+  --color-rosa:        #C47D8E;  /* rosa chancha institucional */
+  --color-rosa-ink:    #9C4E63;  /* rosa para texto (contraste) */
+  --color-rosa-claro:  #F3E4E6;  /* fondos de tarjeta */
+
+  --color-cancha:       #3F7B50;  /* césped */
+  --color-cancha-2:     #458656;  /* franja alternada */
+  --color-cancha-linea: #F4F1EA;  /* cal */
+
+  --color-gano:   #3F7B50;
+  --color-perdio: #9C4E63;
+
+  /* — Tipografía — */
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body:    "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data:    "Barlow Condensed", "Inter", system-ui, sans-serif;
+
+  --fs-xs:   0.75rem;
+  --fs-sm:   0.875rem;
+  --fs-base: 1rem;
+  --fs-lg:   1.1875rem;
+  --fs-xl:   clamp(1.5rem, 3vw, 1.875rem);
+  --fs-2xl:  clamp(2.4rem, 6vw, 4rem);
+  --fs-num:  clamp(3rem, 9vw, 5.5rem);
+
+  --tracking-label: 0.14em;
+
+  /* — Espaciado — */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2.25rem;
+  --space-7: 3.5rem;
+  --space-8: 5.5rem;
+
+  /* — Forma — */
+  --maxw:        1080px;
+  --gutter:      clamp(16px, 4vw, 40px);
+  --radius:      3px;
+  --radius-card: 5px;
+  --line:        1px;
+
+  /* — Movimiento — */
+  --ease:     cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 220ms;
+  --dur:      700ms;
+}
