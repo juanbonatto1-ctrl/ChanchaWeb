@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
       "runtimeArgs": ["serve.js", "5500"],
       "port": 5500
+    },
+    {
+      "name": "chancha-prueba",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["serve.js", "5501", "prueba"],
+      "port": 5501
     }
   ]
 }

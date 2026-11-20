@@ -1,7 +1,8 @@
 -- ==========================================================
 -- La Chancha · Clip del año (clips + votos tipo Reddit)
 -- Pegalo entero en Supabase → SQL Editor → New query → Run.
--- Se puede correr más de una vez sin romper nada.
+-- Correlo DESPUÉS de usuarios.sql. Se puede correr más de una vez sin romper nada.
+-- Todos ven los clips; solo los socios con usuario suben y votan.
 -- ==========================================================
 
 -- 1) Clips subidos por los socios
@@ -28,7 +29,7 @@ create table if not exists public.clip_votos (
 create index if not exists clip_votos_clip_idx on public.clip_votos (clip_id);
 create index if not exists clips_owner_idx on public.clips (owner);
 
--- 3) Seguridad (RLS): todos leen; cada uno sube, borra y vota solo lo suyo
+-- 3) Seguridad (RLS): todos leen; cada socio sube con SU nombre, borra lo suyo (el admin, todo)
 alter table public.clips      enable row level security;
 alter table public.clip_votos enable row level security;
 
@@ -36,8 +37,10 @@ drop policy if exists "clips: leer"          on public.clips;
 drop policy if exists "clips: subir propio"  on public.clips;
 drop policy if exists "clips: borrar propio" on public.clips;
 create policy "clips: leer"          on public.clips for select to anon, authenticated using (true);
-create policy "clips: subir propio"  on public.clips for insert to authenticated with check (owner = (select auth.uid()));
-create policy "clips: borrar propio" on public.clips for delete to authenticated using (owner = (select auth.uid()));
+create policy "clips: subir propio"  on public.clips for insert to authenticated
+  with check (owner = (select auth.uid()) and autor = (select public.mi_nombre()));
+create policy "clips: borrar propio" on public.clips for delete to authenticated
+  using (owner = (select auth.uid()) or (select public.soy_admin()));
 
 -- No se puede votar el clip propio
 create or replace function public.es_clip_ajeno(p_clip uuid)
@@ -61,10 +64,10 @@ drop policy if exists "votos: cambiar" on public.clip_votos;
 drop policy if exists "votos: sacar"  on public.clip_votos;
 create policy "votos: leer"    on public.clip_votos for select to anon, authenticated using (true);
 create policy "votos: votar"   on public.clip_votos for insert to authenticated
-  with check (user_id = (select auth.uid()) and public.es_clip_ajeno(clip_id));
+  with check (user_id = (select auth.uid()) and (select public.soy_socio()) and public.es_clip_ajeno(clip_id));
 create policy "votos: cambiar" on public.clip_votos for update to authenticated
   using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()) and public.es_clip_ajeno(clip_id));
+  with check (user_id = (select auth.uid()) and (select public.soy_socio()) and public.es_clip_ajeno(clip_id));
 create policy "votos: sacar"   on public.clip_votos for delete to authenticated using (user_id = (select auth.uid()));
 
 -- 4) Videos: bucket público "clips" (hasta 50 MB por video, solo MP4/MOV/WebM)
@@ -79,6 +82,6 @@ on conflict (id) do update
 drop policy if exists "clips storage: subir"        on storage.objects;
 drop policy if exists "clips storage: borrar propio" on storage.objects;
 create policy "clips storage: subir" on storage.objects for insert to authenticated
-  with check (bucket_id = 'clips' and (storage.foldername(name))[1] = (select auth.uid())::text);
+  with check (bucket_id = 'clips' and (select public.soy_socio()) and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy "clips storage: borrar propio" on storage.objects for delete to authenticated
-  using (bucket_id = 'clips' and owner_id = (select auth.uid())::text);
+  using (bucket_id = 'clips' and (owner_id = (select auth.uid())::text or (select public.soy_admin())));

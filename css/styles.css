@@ -91,9 +91,29 @@ img.crest { height: auto; }
 .nav a[aria-current="page"] { color: var(--color-ink); }
 .nav a[aria-current="page"]::after { transform: scaleX(1); height: 2px; }
 
+.nav { margin-left: auto; }
+.user-btn {
+  display: inline-flex; align-items: center; gap: var(--space-2); flex: none;
+  font: inherit; font-size: var(--fs-xs); font-weight: 600; letter-spacing: var(--tracking-label); text-transform: uppercase;
+  color: var(--color-ink); background: var(--color-surface); border: var(--line) solid var(--color-line); border-radius: 999px;
+  padding: 0.4rem 0.85rem; cursor: pointer; transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.user-btn:hover { border-color: var(--color-rosa); background: var(--color-rosa-claro); }
+.user-btn .lock { width: 12px; height: 12px; }
+.user-btn.is-in { padding: 0.25rem 0.75rem 0.25rem 0.25rem; text-transform: none; letter-spacing: 0; font-size: 0.875rem; }
+.user-avatar { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--color-rosa); color: #fff; font-family: var(--font-data); font-size: 0.8125rem; letter-spacing: 0.02em; }
+.user-name { font-family: var(--font-display); font-weight: 500; }
+.user-admin { font-family: var(--font-data); font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-rosa-ink); }
+
+.cuenta { display: flex; align-items: center; gap: var(--space-3); }
+.user-avatar--lg { width: 3rem; height: 3rem; font-size: 1.125rem; flex: none; }
+.premio-acciones { display: flex; gap: var(--space-3); margin-top: var(--space-2); }
+.premio-acciones .link-btn { position: static; }
+.clip-form--login { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+
 @media (max-width: 640px) {
   .header-inner { flex-wrap: wrap; gap: var(--space-2); }
-  .nav { width: 100%; justify-content: space-between; gap: var(--space-2); border-top: var(--line) solid var(--color-line); padding-top: var(--space-1); }
+  .nav { order: 3; margin-left: 0; width: 100%; justify-content: space-between; gap: var(--space-2); border-top: var(--line) solid var(--color-line); padding-top: var(--space-1); }
 }
 
 /* ================= Secciones ================= */

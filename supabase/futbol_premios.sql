@@ -2,9 +2,8 @@
 -- La Chancha · Fútbol y premios compartidos
 -- (partidos, notas entre jugadores, dorsales y premios extra)
 -- Pegalo entero en Supabase → SQL Editor → New query → Run.
--- Se puede correr más de una vez sin romper nada.
--- Requiere: Authentication → "Allow anonymous sign-ins" activado
--- (lo mismo que pide clips.sql).
+-- Correlo DESPUÉS de usuarios.sql. Se puede correr más de una vez sin romper nada.
+-- Todos ven todo; solo los socios con usuario cargan y modifican.
 -- ==========================================================
 
 -- Validación de notas: objeto { "Jugador": nota } con notas entre 1 y 10
@@ -104,47 +103,62 @@ create trigger dorsales_updated_at before update on public.dorsales
   for each row execute function public.tocar_updated_at();
 
 -- ---------- Seguridad (RLS) ----------
--- Todos leen. Cada celular (usuario anónimo) carga lo suyo
--- y solo puede cambiar o borrar lo que cargó.
+-- Todos leen. Solo los socios con usuario (ver usuarios.sql) cargan cosas.
+-- Cada uno cambia o borra lo suyo; el admin puede todo.
 alter table public.partidos enable row level security;
 alter table public.notas    enable row level security;
 alter table public.dorsales enable row level security;
 alter table public.premios  enable row level security;
 
--- partidos
+-- partidos: cualquier socio carga; borra quien lo cargó o el admin
 drop policy if exists "partidos: leer"          on public.partidos;
 drop policy if exists "partidos: cargar"        on public.partidos;
 drop policy if exists "partidos: borrar propio" on public.partidos;
-create policy "partidos: leer"          on public.partidos for select to anon, authenticated using (true);
-create policy "partidos: cargar"        on public.partidos for insert to authenticated with check (created_by = (select auth.uid()));
-create policy "partidos: borrar propio" on public.partidos for delete to authenticated using (created_by = (select auth.uid()));
+drop policy if exists "partidos: borrar"        on public.partidos;
+create policy "partidos: leer"   on public.partidos for select to anon, authenticated using (true);
+create policy "partidos: cargar" on public.partidos for insert to authenticated
+  with check (created_by = (select auth.uid()) and (select public.soy_socio()));
+create policy "partidos: borrar" on public.partidos for delete to authenticated
+  using (created_by = (select auth.uid()) or (select public.soy_admin()));
 
--- notas
+-- notas: cada socio vota con SU nombre (no puede votar por otro)
 drop policy if exists "notas: leer"           on public.notas;
 drop policy if exists "notas: votar"          on public.notas;
 drop policy if exists "notas: cambiar propio" on public.notas;
 drop policy if exists "notas: borrar propio"  on public.notas;
 create policy "notas: leer"           on public.notas for select to anon, authenticated using (true);
-create policy "notas: votar"          on public.notas for insert to authenticated with check (user_id = (select auth.uid()));
+create policy "notas: votar"          on public.notas for insert to authenticated
+  with check (user_id = (select auth.uid()) and votante = (select public.mi_nombre()));
 create policy "notas: cambiar propio" on public.notas for update to authenticated
-  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
-create policy "notas: borrar propio"  on public.notas for delete to authenticated using (user_id = (select auth.uid()));
+  using (votante = (select public.mi_nombre()))
+  with check (user_id = (select auth.uid()) and votante = (select public.mi_nombre()));
+create policy "notas: borrar propio"  on public.notas for delete to authenticated
+  using (votante = (select public.mi_nombre()) or (select public.soy_admin()));
 
--- dorsales
+-- dorsales: cada socio elige SU número; el admin puede cambiar el de cualquiera
 drop policy if exists "dorsales: leer"           on public.dorsales;
 drop policy if exists "dorsales: elegir"         on public.dorsales;
 drop policy if exists "dorsales: cambiar propio" on public.dorsales;
 drop policy if exists "dorsales: borrar propio"  on public.dorsales;
 create policy "dorsales: leer"           on public.dorsales for select to anon, authenticated using (true);
-create policy "dorsales: elegir"         on public.dorsales for insert to authenticated with check (user_id = (select auth.uid()));
+create policy "dorsales: elegir"         on public.dorsales for insert to authenticated
+  with check (nombre = (select public.mi_nombre()) or (select public.soy_admin()));
 create policy "dorsales: cambiar propio" on public.dorsales for update to authenticated
-  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
-create policy "dorsales: borrar propio"  on public.dorsales for delete to authenticated using (user_id = (select auth.uid()));
+  using (nombre = (select public.mi_nombre()) or (select public.soy_admin()))
+  with check (nombre = (select public.mi_nombre()) or (select public.soy_admin()));
+create policy "dorsales: borrar propio"  on public.dorsales for delete to authenticated
+  using (nombre = (select public.mi_nombre()) or (select public.soy_admin()));
 
--- premios
+-- premios (categorías): cualquier socio agrega; editar solo el admin; borrar quien la cargó o el admin
 drop policy if exists "premios: leer"          on public.premios;
 drop policy if exists "premios: cargar"        on public.premios;
 drop policy if exists "premios: borrar propio" on public.premios;
-create policy "premios: leer"          on public.premios for select to anon, authenticated using (true);
-create policy "premios: cargar"        on public.premios for insert to authenticated with check (created_by = (select auth.uid()));
-create policy "premios: borrar propio" on public.premios for delete to authenticated using (created_by = (select auth.uid()));
+drop policy if exists "premios: borrar"        on public.premios;
+drop policy if exists "premios: editar"        on public.premios;
+create policy "premios: leer"   on public.premios for select to anon, authenticated using (true);
+create policy "premios: cargar" on public.premios for insert to authenticated
+  with check (created_by = (select auth.uid()) and (select public.soy_socio()));
+create policy "premios: editar" on public.premios for update to authenticated
+  using ((select public.soy_admin())) with check ((select public.soy_admin()));
+create policy "premios: borrar" on public.premios for delete to authenticated
+  using (created_by = (select auth.uid()) or (select public.soy_admin()));

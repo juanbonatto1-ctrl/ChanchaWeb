@@ -1,19 +1,19 @@
 -- ==========================================================
 -- La Chancha · Votación de los Chancha Awards
--- Correlo DESPUÉS de asistencia_admin.sql (usa los socios y el PIN de admin).
+-- Correlo DESPUÉS de asistencia_admin.sql y usuarios.sql.
 -- Pegalo entero en Supabase → SQL Editor → New query → Run.
 -- Se puede correr más de una vez sin romper nada.
 --
 -- Cómo funciona:
--- · El admin (PIN) abre UNA votación con todas las categorías de premios
+-- · El usuario admin abre UNA votación con todas las categorías de premios
 --   que todavía no tienen ganador (las de "Agregar premio").
--- · Cada socio elige su nombre y completa la boleta: vota en todas las
+-- · Cada socio entra con su usuario y completa la boleta: vota en todas las
 --   categorías de una vez. Puede cambiar su boleta mientras esté abierta.
+--   Vota siempre con su nombre: no se puede votar por otro.
 -- · Cada categoría es "individual" (se vota a una persona) o "dupla" (una pareja).
 -- · Nadie se vota a sí mismo (ni puede estar en la dupla que vota).
 -- · Los votos son secretos y no se pueden leer hasta que la votación se cierra.
 -- · Si hay empate, ganan todos los empatados (lo calcula la web).
--- Requiere "Allow anonymous sign-ins" activado (una boleta por celular).
 -- ==========================================================
 
 -- Si quedó la versión anterior (una votación por premio, sin categorías), se reemplaza.
@@ -26,8 +26,13 @@ begin
     drop table if exists public.votaciones;
   end if;
 end $$;
+-- Versiones viejas (con nombre elegido a mano o con PIN)
 drop function if exists public.votar(uuid, text, text, text);
+drop function if exists public.votar(uuid, text, jsonb);
 drop function if exists public.admin_crear_votacion(text, text, text, text);
+drop function if exists public.admin_crear_votacion(text, text, text, jsonb);
+drop function if exists public.admin_cerrar_votacion(text, uuid);
+drop function if exists public.admin_borrar_votacion(text, uuid);
 
 create table if not exists public.votaciones (
   id         uuid primary key default gen_random_uuid(),
@@ -80,17 +85,18 @@ $$;
 revoke all on function public.votaciones_participacion() from public;
 grant execute on function public.votaciones_participacion() to anon, authenticated;
 
--- Votar: manda la boleta entera y reemplaza la anterior de esa persona.
+-- Votar: manda la boleta entera y reemplaza la anterior. Se vota con el nombre del usuario.
 -- p_votos: [{ "categoria": "...", "e1": "Nombre", "e2": "Nombre o null" }]
-create or replace function public.votar(p_votacion uuid, p_votante text, p_votos jsonb)
+create or replace function public.votar(p_votacion uuid, p_votos jsonb)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v_uid    uuid := auth.uid();
-  v_estado text;
+  v_uid     uuid := auth.uid();
+  p_votante text := public.mi_nombre();
+  v_estado  text;
   v_cats   jsonb;
   item     jsonb;
   v_cat    jsonb;
@@ -99,8 +105,8 @@ declare
   e2       text;
   vistos   text[] := '{}';
 begin
-  if v_uid is null then
-    return jsonb_build_object('ok', false, 'error', 'No hay sesión. Recargá la página.');
+  if v_uid is null or p_votante is null then
+    return jsonb_build_object('ok', false, 'error', 'Entrá con tu usuario para votar.');
   end if;
   select estado, categorias into v_estado, v_cats from public.votaciones where id = p_votacion;
   if v_estado is null then
@@ -109,21 +115,8 @@ begin
   if v_estado <> 'abierta' then
     return jsonb_build_object('ok', false, 'error', 'La votación ya está cerrada.');
   end if;
-  if not exists (select 1 from public.socios where nombre = p_votante) then
-    return jsonb_build_object('ok', false, 'error', 'Elegí tu nombre del padrón.');
-  end if;
   if p_votos is null or jsonb_typeof(p_votos) <> 'array' or jsonb_array_length(p_votos) = 0 then
     return jsonb_build_object('ok', false, 'error', 'Votá en al menos una categoría.');
-  end if;
-
-  -- Un celular = una persona
-  if exists (select 1 from public.votaciones_votos
-              where votacion_id = p_votacion and votante = p_votante and user_id <> v_uid) then
-    return jsonb_build_object('ok', false, 'error', p_votante || ' ya votó desde otro celular.');
-  end if;
-  if exists (select 1 from public.votaciones_votos
-              where votacion_id = p_votacion and user_id = v_uid and votante <> p_votante) then
-    return jsonb_build_object('ok', false, 'error', 'Desde este celular ya votó otra persona.');
   end if;
 
   -- Validar toda la boleta antes de guardar
@@ -169,26 +162,26 @@ begin
   return jsonb_build_object('ok', true);
 end;
 $$;
-revoke all on function public.votar(uuid, text, jsonb) from public, anon;
-grant execute on function public.votar(uuid, text, jsonb) to authenticated;
+revoke all on function public.votar(uuid, jsonb) from public, anon;
+grant execute on function public.votar(uuid, jsonb) to authenticated;
 
--- ---------- Admin (con PIN) ----------
+-- ---------- Admin (usuario con admin = true) ----------
 -- p_categorias: [{ "id": "...", "titulo": "...", "tipo": "individual" | "dupla" }]
-create or replace function public.admin_crear_votacion(p_pin text, p_titulo text, p_detalle text, p_categorias jsonb)
+create or replace function public.admin_crear_votacion(p_titulo text, p_detalle text, p_categorias jsonb)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v    boolean;
   t    text := btrim(coalesce(p_titulo, ''));
   nid  uuid;
   c    jsonb;
   cats jsonb := '[]'::jsonb;
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   if t = '' or char_length(t) > 60 then
     return jsonb_build_object('ok', false, 'error', 'El nombre de la votación tiene que tener entre 1 y 60 letras.');
   end if;
@@ -213,39 +206,39 @@ begin
 end;
 $$;
 
-create or replace function public.admin_cerrar_votacion(p_pin text, p_id uuid)
+create or replace function public.admin_cerrar_votacion(p_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare v boolean;
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   update public.votaciones set estado = 'cerrada', cerrada_at = now() where id = p_id and estado = 'abierta';
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-create or replace function public.admin_borrar_votacion(p_pin text, p_id uuid)
+create or replace function public.admin_borrar_votacion(p_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare v boolean;
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   delete from public.votaciones where id = p_id;
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-revoke all on function public.admin_crear_votacion(text, text, text, jsonb) from public;
-revoke all on function public.admin_cerrar_votacion(text, uuid)             from public;
-revoke all on function public.admin_borrar_votacion(text, uuid)             from public;
-grant execute on function public.admin_crear_votacion(text, text, text, jsonb) to anon, authenticated;
-grant execute on function public.admin_cerrar_votacion(text, uuid)             to anon, authenticated;
-grant execute on function public.admin_borrar_votacion(text, uuid)             to anon, authenticated;
+revoke all on function public.admin_crear_votacion(text, text, jsonb) from public, anon;
+revoke all on function public.admin_cerrar_votacion(uuid)             from public, anon;
+revoke all on function public.admin_borrar_votacion(uuid)             from public, anon;
+grant execute on function public.admin_crear_votacion(text, text, jsonb) to authenticated;
+grant execute on function public.admin_cerrar_votacion(uuid)             to authenticated;
+grant execute on function public.admin_borrar_votacion(uuid)             to authenticated;

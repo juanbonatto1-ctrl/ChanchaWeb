@@ -1,12 +1,10 @@
 -- ==========================================================
--- La Chancha · Asistencia a juntadas (solo el admin carga)
+-- La Chancha · Socios y asistencia a juntadas (solo el admin carga)
 -- Pegalo entero en Supabase → SQL Editor → New query → Run.
--- Se puede correr más de una vez: no duplica socios ni borra juntadas.
+-- Va PRIMERO. Se puede correr más de una vez: no duplica socios ni borra juntadas.
 --
 -- Todos pueden VER la asistencia.
--- Solo el admin (con PIN) puede registrar juntadas, quitarlas o agregar socios.
--- El PIN se verifica en la base (no en la página) y se guarda cifrado.
--- Después de 10 intentos fallidos se bloquea 15 minutos.
+-- Solo el usuario admin (ver usuarios.sql) puede registrar juntadas, quitarlas o agregar socios.
 -- ==========================================================
 
 create extension if not exists pgcrypto with schema extensions;
@@ -55,92 +53,27 @@ create policy "socios: leer"            on public.socios            for select t
 create policy "juntadas: leer"          on public.juntadas          for select to anon, authenticated using (true);
 create policy "juntada_presentes: leer" on public.juntada_presentes for select to anon, authenticated using (true);
 -- Sin políticas de insert/update/delete: nadie escribe directo.
--- Solo se escribe con las funciones admin_* de abajo, que piden el PIN.
+-- Solo se escribe con las funciones admin_* de abajo, que verifican que seas el admin.
 
--- ---------- Esquema privado: admin e intentos (no se expone) ----------
-create schema if not exists privado;
-revoke all on schema privado from public, anon, authenticated;
-
-create table if not exists privado.admin (
-  id       smallint primary key default 1 check (id = 1),
-  usuario  text not null,
-  pin_hash text not null
-);
-
-create table if not exists privado.intentos (
-  id  bigint generated always as identity primary key,
-  at  timestamptz not null default now(),
-  ok  boolean not null
-);
-
--- Devuelve true (PIN bien), false (PIN mal) o null (bloqueado por intentos)
-create or replace function privado.verificar_pin(p_pin text)
-returns boolean
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_fallos integer;
-  v_ok     boolean;
-begin
-  delete from privado.intentos where at < now() - interval '1 day';
-  select count(*) into v_fallos
-    from privado.intentos
-   where not ok and at > now() - interval '15 minutes';
-  if v_fallos >= 10 then
-    return null;
-  end if;
-  select exists (
-    select 1 from privado.admin a
-     where a.pin_hash = extensions.crypt(coalesce(p_pin, ''), a.pin_hash)
-  ) into v_ok;
-  insert into privado.intentos (ok) values (v_ok);
-  return v_ok;
-end;
-$$;
-revoke all on function privado.verificar_pin(text) from public, anon, authenticated;
-
-create or replace function privado.error_pin(p_ok boolean)
-returns jsonb
-language sql
-immutable
-set search_path = ''
-as $$
-  select case
-    when p_ok is null then jsonb_build_object('ok', false, 'error', 'Demasiados intentos fallidos. Esperá 15 minutos.')
-    else jsonb_build_object('ok', false, 'error', 'PIN incorrecto.')
-  end;
-$$;
-revoke all on function privado.error_pin(boolean) from public, anon, authenticated;
+-- ---------- Se saca el PIN viejo (ahora el admin es un usuario) ----------
+drop function if exists public.admin_entrar(text);
+drop function if exists public.admin_registrar_juntada(text, date, text, text[]);
+drop function if exists public.admin_quitar_juntada(text, uuid);
+drop function if exists public.admin_agregar_socio(text, text);
+drop schema if exists privado cascade;
 
 -- ---------- Funciones del admin (las llama la web) ----------
-create or replace function public.admin_entrar(p_pin text)
+create or replace function public.admin_registrar_juntada(p_fecha date, p_nombre text, p_presentes text[])
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare v boolean;
+declare nid uuid;
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
-  return jsonb_build_object('ok', true);
-end;
-$$;
-
-create or replace function public.admin_registrar_juntada(p_pin text, p_fecha date, p_nombre text, p_presentes text[])
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v   boolean;
-  nid uuid;
-begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   if p_fecha is null then
     return jsonb_build_object('ok', false, 'error', 'Falta la fecha.');
   end if;
@@ -162,33 +95,32 @@ begin
 end;
 $$;
 
-create or replace function public.admin_quitar_juntada(p_pin text, p_id uuid)
+create or replace function public.admin_quitar_juntada(p_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare v boolean;
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   delete from public.juntadas where id = p_id;
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-create or replace function public.admin_agregar_socio(p_pin text, p_nombre text)
+create or replace function public.admin_agregar_socio(p_nombre text)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare
-  v boolean;
-  n text := btrim(coalesce(p_nombre, ''));
+declare n text := btrim(coalesce(p_nombre, ''));
 begin
-  v := privado.verificar_pin(p_pin);
-  if v is not true then return privado.error_pin(v); end if;
+  if not public.soy_admin() then
+    return jsonb_build_object('ok', false, 'error', 'Solo el admin puede hacer esto.');
+  end if;
   if n = '' or char_length(n) > 30 then
     return jsonb_build_object('ok', false, 'error', 'El nombre tiene que tener entre 1 y 30 letras.');
   end if;
@@ -201,14 +133,12 @@ begin
 end;
 $$;
 
-revoke all on function public.admin_entrar(text)                                from public;
-revoke all on function public.admin_registrar_juntada(text, date, text, text[]) from public;
-revoke all on function public.admin_quitar_juntada(text, uuid)                  from public;
-revoke all on function public.admin_agregar_socio(text, text)                   from public;
-grant execute on function public.admin_entrar(text)                                to anon, authenticated;
-grant execute on function public.admin_registrar_juntada(text, date, text, text[]) to anon, authenticated;
-grant execute on function public.admin_quitar_juntada(text, uuid)                  to anon, authenticated;
-grant execute on function public.admin_agregar_socio(text, text)                   to anon, authenticated;
+revoke all on function public.admin_registrar_juntada(date, text, text[]) from public, anon;
+revoke all on function public.admin_quitar_juntada(uuid)                  from public, anon;
+revoke all on function public.admin_agregar_socio(text)                   from public, anon;
+grant execute on function public.admin_registrar_juntada(date, text, text[]) to authenticated;
+grant execute on function public.admin_quitar_juntada(uuid)                  to authenticated;
+grant execute on function public.admin_agregar_socio(text)                   to authenticated;
 
 -- ---------- Datos iniciales ----------
 -- Totales de la planilla Chancha2026 (68 juntadas)
@@ -222,9 +152,3 @@ insert into public.socios (nombre, orden, asistencias_base) values
   ('Santi', 9, 25), ('Gordo', 10, 24), ('Luquinho', 11, 17), ('ChancaD10s', 12, 15),
   ('Agus', 13, 8)
 on conflict (nombre) do nothing;
-
--- Admin único. PIN: 6767 (queda guardado cifrado).
--- Para cambiarlo, cambiá el número acá y volvé a correr el archivo.
-insert into privado.admin (id, usuario, pin_hash)
-values (1, 'admin', extensions.crypt('6767', extensions.gen_salt('bf')))
-on conflict (id) do update set pin_hash = excluded.pin_hash, usuario = excluded.usuario;

@@ -60,14 +60,31 @@
     obj.actualizado = new Date().toISOString();
     return storeSet(K.asistencia, obj);
   }
-  function isAdmin() { try { return sessionStorage.getItem(K.admin) === "1"; } catch (e) { return false; } }
-  function setAdmin(on, pin) {
-    try {
-      if (on) { sessionStorage.setItem(K.admin, "1"); if (pin) sessionStorage.setItem(K.admin + ".pin", pin); }
-      else { sessionStorage.removeItem(K.admin); sessionStorage.removeItem(K.admin + ".pin"); }
-    } catch (e) {}
+  /* ================= usuarios =================
+     Cada socio entra con su usuario (nombre + contraseña). Solo con usuario se vota y se carga.
+     ME = { nombre, admin } del que tiene la sesión abierta, o null. */
+  var ME = null;
+  var KU = "chancha.usuario";      // modo de prueba (sin Supabase): usuario simulado
+  var ADMIN_PRUEBA = "Sexo7";      // admin en el modo de prueba
+  function isAdmin() { return !!(ME && ME.admin); }
+  function emailDe(nombre) {
+    return String(nombre).toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "") + "@lachancha.club";
   }
-  function adminPin() { try { return sessionStorage.getItem(K.admin + ".pin") || ""; } catch (e) { return ""; } }
+  function loadMe() {
+    if (!ONLINE) {
+      var n = storeGet(KU, "");
+      ME = n ? { nombre: n, admin: n === ADMIN_PRUEBA } : null;
+      return Promise.resolve();
+    }
+    return sb.auth.getSession().then(function (r) {
+      var s = r.data && r.data.session;
+      if (!s || s.user.is_anonymous) { ME = null; return; }
+      return sb.rpc("yo").then(function (r2) {
+        var d = r2.data;
+        ME = d && d.nombre ? { nombre: d.nombre, admin: !!d.admin } : null;
+      });
+    }).catch(function () { ME = null; });
+  }
 
   function loadAsistRemote() {
     if (!ONLINE) return Promise.resolve();
@@ -93,16 +110,11 @@
     }).catch(function (e) { REMOTE_A_ERROR = friendly(e); });
   }
 
-  // Llama a una función admin_* de Supabase con el PIN; devuelve un mensaje de error o nada.
+  // Llama a una función admin_* de Supabase (verifica en la base que seas el admin); devuelve un error o nada.
   function adminRpc(fn, args, recargar) {
-    args.p_pin = adminPin();
     return sb.rpc(fn, args).then(function (r) {
       check(r);
-      if (!r.data || !r.data.ok) {
-        var msg = (r.data && r.data.error) || "No se pudo guardar.";
-        if (/PIN|intentos/.test(msg)) setAdmin(false);
-        return msg;
-      }
+      if (!r.data || !r.data.ok) return (r.data && r.data.error) || "No se pudo guardar.";
       return (recargar || loadAsistRemote)().then(function () { return null; });
     }).catch(function (e) { return friendly(e); });
   }
@@ -127,13 +139,6 @@
     promedio = socios.length && TOTAL ? sumAsist / (socios.length * TOTAL) : 0;
     minTitular = Math.ceil(UMBRAL * TOTAL - 1e-9);
     NOMBRES = socios.map(function (s) { return s.nombre; });
-  }
-
-  function sha256(text) {
-    if (!window.crypto || !crypto.subtle) return Promise.reject(new Error("no-crypto"));
-    return crypto.subtle.digest("SHA-256", new TextEncoder().encode("la-chancha:" + text)).then(function (buf) {
-      return Array.prototype.map.call(new Uint8Array(buf), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
-    });
   }
 
   function descargarAsistencia() {
@@ -165,21 +170,20 @@
   var sb = ONLINE ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
   var REMOTE = { loaded: !ONLINE, error: null, uid: null, partidos: [], notas: {}, dorsales: {}, premios: [] };
 
+  // Devuelve el usuario con sesión abierta; si no entró con su usuario, corta con un error.
   function ensureSession() {
     return sb.auth.getSession().then(function (r) {
-      if (r.data && r.data.session) return r.data.session.user;
-      return sb.auth.signInAnonymously().then(function (r2) {
-        if (r2.error) throw r2.error;
-        return r2.data.user;
-      });
+      var s = r.data && r.data.session;
+      if (!s || !ME) throw new Error("Entrá con tu usuario para hacer esto.");
+      return s.user;
     });
   }
   function check(r) { if (r && r.error) throw r.error; return r; }
   function friendly(e, dup) {
     var m = (e && e.message) || String(e);
     if (e && e.code === "23505") return dup || "Eso ya está cargado.";
-    if (/row-level security/i.test(m)) return "No podés cambiar eso: lo cargó otra persona.";
-    if (/anonymous/i.test(m)) return "Falta activar “Allow anonymous sign-ins” en Supabase (ver LEEME).";
+    if (/row-level security/i.test(m)) return "No tenés permiso para cambiar eso.";
+    if (/Invalid login credentials/i.test(m)) return "Usuario o contraseña incorrectos.";
     if (/Failed to fetch|NetworkError/i.test(m)) return "Sin conexión. Probá de nuevo.";
     return m;
   }
@@ -362,13 +366,19 @@
     var links = NAV.map(function (n) {
       return '<a href="' + n.href + '"' + (n.id === page ? ' aria-current="page"' : "") + ">" + n.label + "</a>";
     }).join("");
+    var user = ME
+      ? '<button type="button" class="user-btn is-in" data-action="cuenta" title="Mi cuenta">' +
+          '<span class="user-avatar" aria-hidden="true">' + esc(initials(ME.nombre)) + "</span>" +
+          '<span class="user-name">' + esc(ME.nombre) + (ME.admin ? ' <small class="user-admin">admin</small>' : "") + "</span></button>"
+      : '<button type="button" class="user-btn" data-action="login">' + LOCK + " Entrar</button>";
     return (
-      '<header class="site-header">' +
+      '<header class="site-header" id="header">' +
         '<div class="wrap header-inner">' +
           '<a class="brand" href="/" aria-label="La Chancha — Inicio">' + crest() +
             '<span class="brand-text"><span class="brand-kicker">Club Social y Deportivo</span><span class="brand-name">La Chancha</span></span>' +
           "</a>" +
           '<nav class="nav" aria-label="Principal">' + links + "</nav>" +
+          user +
         "</div>" +
         '<div class="band" aria-hidden="true"></div>' +
       "</header>"
@@ -533,9 +543,7 @@
     var estado = ONLINE
       ? (REMOTE_A_ERROR ? '<p class="notice"><strong>No se pudo conectar con la base.</strong> ' + esc(REMOTE_A_ERROR) + "</p>" : "")
       : "";
-    if (!isAdmin()) {
-      return estado + '<p class="admin-entry"><button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Entrar como admin</button></p>";
-    }
+    if (!isAdmin()) return estado;
     var nota = ONLINE
       ? '<p class="form-note">Conectado a la base: lo que cargues lo ve todo el grupo al instante.</p>'
       : cambiosSinPublicar
@@ -546,7 +554,7 @@
     return (
       estado +
       '<div class="admin-bar reveal">' +
-        '<div class="admin-bar-head"><p class="label">' + LOCK + ' Modo admin</p><button type="button" class="link-btn link-btn--muted" data-action="salir">Salir</button></div>' +
+        '<div class="admin-bar-head"><p class="label">' + LOCK + " Admin · " + esc(ME.nombre) + "</p></div>" +
         '<div class="admin-actions">' +
           '<button type="button" class="btn" data-action="juntada">Registrar juntada</button>' +
           '<button type="button" class="btn btn--ghost" data-action="socio">Agregar socio</button>' +
@@ -732,7 +740,9 @@
         '<li class="kit' + (j.dorsal == null ? " is-empty" : "") + '">' + camiseta(j) +
           '<p class="kit-name">' + esc(j.nombre) + "</p>" +
           '<p class="kit-pos">' + (j.pos ? POS_LABEL[j.pos] : "Posición a definir") + "</p>" +
-          '<button type="button" class="link-btn" data-action="dorsal" data-nombre="' + esc(j.nombre) + '">' + (j.dorsal == null ? "Elegir número" : "Cambiar") + "</button>" +
+          (ME && (isAdmin() || ME.nombre === j.nombre)
+            ? '<button type="button" class="link-btn" data-action="dorsal" data-nombre="' + esc(j.nombre) + '">' + (j.dorsal == null ? "Elegir número" : "Cambiar") + "</button>"
+            : "") +
         "</li>"
       );
     }).join("") + "</ul>";
@@ -760,7 +770,7 @@
               '<td class="num acciones">' +
                 '<button type="button" class="link-btn" data-action="ver" data-id="' + esc(m.id) + '">Ver</button>' +
                 (ok ? '<button type="button" class="link-btn" data-action="nota" data-id="' + esc(m.id) + '">Nota</button>' : "") +
-                (m.local ? '<button type="button" class="link-btn link-btn--muted" data-action="quitar-partido" data-id="' + esc(m.id) + '">Quitar</button>' : "") +
+                ((m.local || isAdmin()) && !m.ejemplo ? '<button type="button" class="link-btn link-btn--muted" data-action="quitar-partido" data-id="' + esc(m.id) + '">Quitar</button>' : "") +
               "</td>" +
             "</tr>"
           );
@@ -790,7 +800,7 @@
       section(3, "Historial de partidos", hist, asideLabel(plural(P.length, "partido", "partidos"))) +
       section(4, "Plantel",
         '<p class="section-intro">Cada jugador elige su número y no se puede repetir.</p>' + kits(),
-        addBtn("dorsal", "Agregar dorsal"), "plantel") +
+        addBtn("dorsal", isAdmin() ? "Cambiar dorsal" : "Mi remera"), "plantel") +
       ((D.torneos || []).length ? section(5, "Campeones", campeones(), asideLabel("Palmarés"), "campeones") : "")
     );
   }
@@ -873,7 +883,7 @@
         var v = votos[c.id] || 0;
         return {
           id: c.id, titulo: c.titulo, autor: c.autor, url: c.url, video: null, creado: c.creado || c.fecha || "",
-          up: v > 0 ? 1 : 0, down: v < 0 ? 1 : 0, score: v, miVoto: v, esMio: !c.fijo
+          up: v > 0 ? 1 : 0, down: v < 0 ? 1 : 0, score: v, miVoto: v, fijo: !!c.fijo, esMio: !c.fijo && !!ME && c.autor === ME.nombre
         };
       }));
     },
@@ -915,7 +925,7 @@
   var ARROW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4l6 8h-4v4H8v-4H4z"/></svg>';
 
   function clipCard(c, i) {
-    var puedeVotar = !ONLINE || !c.esMio;
+    var puedeVotar = !c.esMio;
     var top = i === 0 && c.score > 0;
     function voteBtn(v) {
       var on = c.miVoto === v;
@@ -940,7 +950,10 @@
             '<h3 class="clip-title">' + esc(c.titulo) + "</h3>" +
             '<p class="clip-meta">' + (c.autor ? "Subido por " + esc(c.autor) : "") + (c.creado ? " · " + fecha(String(c.creado).slice(0, 10)) : "") +
               " · " + plural(c.up, "a favor", "a favor") + ", " + c.down + " en contra</p>" +
-            (c.esMio ? '<p class="clip-local"><span class="badge badge--local">' + (ONLINE ? "Tu clip" : "Este dispositivo") + '</span><button type="button" class="link-btn link-btn--muted" data-action="quitar-clip" data-id="' + esc(c.id) + '">Quitar</button></p>' : "") +
+            (c.esMio || (isAdmin() && !c.fijo)
+              ? '<p class="clip-local">' + (c.esMio ? '<span class="badge badge--local">Tu clip</span>' : "") +
+                '<button type="button" class="link-btn link-btn--muted" data-action="quitar-clip" data-id="' + esc(c.id) + '">Quitar</button></p>'
+              : "") +
           "</div>" +
         "</div>" +
       "</article>"
@@ -1217,17 +1230,12 @@
     var v = V.lista.filter(function (x) { return x.id === id; })[0];
     if (!v || v.estado !== "abierta") return;
     var cats = v.categorias || [];
-    var yo = storeGet("chancha.yo", "");
-    if (NOMBRES.indexOf(yo) < 0) yo = "";
+    var votante = ME.nombre;
     var body =
-      '<p class="dlg-context">' + esc(v.titulo) + "</p>" +
-      '<div class="field"><label for="vt-yo">¿Quién sos?</label><select id="vt-yo" name="votante" required>' +
-        options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), yo) + "</select></div>" +
+      '<p class="dlg-context">' + esc(v.titulo) + " · vota " + esc(votante) + "</p>" +
       '<div class="boleta" id="vt-boleta"></div>' +
       '<p class="form-note">Si no querés votar en alguna categoría, dejala vacía. Tu boleta es secreta hasta que se cierre la votación. Si ya votaste, se reemplaza.</p>';
     var form = openDialog("Votar", body, "Enviar boleta", function (f) {
-      var votante = f.votante.value;
-      if (!votante) return "Elegí tu nombre.";
       var votos = [], err = null;
       cats.forEach(function (c, i) {
         if (err) return;
@@ -1242,10 +1250,9 @@
       });
       if (err) return err;
       if (!votos.length) return "Votá en al menos una categoría.";
-      storeSet("chancha.yo", votante);
       if (ONLINE) {
         return ensureSession().then(function () {
-          return sb.rpc("votar", { p_votacion: v.id, p_votante: votante, p_votos: votos });
+          return sb.rpc("votar", { p_votacion: v.id, p_votos: votos });
         }).then(function (r) {
           check(r);
           if (!r.data || !r.data.ok) return (r.data && r.data.error) || "No se pudo votar.";
@@ -1261,7 +1268,7 @@
 
     var cont = document.getElementById("vt-boleta");
     function pintar() {
-      var me = form.votante.value, prev = {};
+      var me = votante, prev = {};
       Array.prototype.forEach.call(cont.querySelectorAll("input"), function (c) {
         if (c.checked) (prev[c.name] = prev[c.name] || []).push(c.value);
       });
@@ -1290,7 +1297,6 @@
       var hint = cont.querySelector('[data-cnt="' + i + '"]');
       if (hint) hint.textContent = max === 2 ? "Dupla · " + n + " de 2" : (n ? "Listo" : "Elegí 1");
     }
-    form.votante.addEventListener("change", pintar);
     cont.addEventListener("change", function (e) {
       var t = e.target;
       if (!t.name || t.name.indexOf("op") !== 0) return;
@@ -1351,7 +1357,7 @@
     var usadas = {};
     getPremios().forEach(function (p) {
       var res = resCat[p.id];
-      var extra = { local: p.local, pid: p.pid };
+      var extra = { local: p.local, pid: p.pid, editable: p.local != null || !!p.pid };
       usadas[p.id] = true;
       if (p.ganador) {
         cats.push(Object.assign({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle), tipo: p.tipo }, extra));
@@ -1379,24 +1385,29 @@
           (c.detail ? '<p class="premio-detail">' + c.detail + "</p>" : "") +
           (c.href ? '<a class="more ulink" href="' + c.href + '">Ver y votar →</a>' : "") +
           (c.href2 ? '<a class="more ulink" href="' + c.href2 + '">' + (c.href2Txt || "Ver estadísticas →") + "</a>" : "") +
-          (isLocal ? '<button type="button" class="link-btn link-btn--muted premio-quitar" data-action="quitar-premio" data-i="' + c.local + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Quitar</button>" : "") +
+          (c.editable && (isLocal || isAdmin())
+            ? '<p class="premio-acciones">' +
+                (isAdmin() ? '<button type="button" class="link-btn" data-action="editar-premio" data-i="' + (c.local != null ? c.local : "") + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Editar</button>" : "") +
+                '<button type="button" class="link-btn link-btn--muted" data-action="quitar-premio" data-i="' + (c.local != null ? c.local : "") + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Quitar</button>" +
+              "</p>"
+            : "") +
         "</article>"
       );
     }).join("") + "</div>";
 
-    var yo = storeGet("chancha.yo", "");
-    var form =
-      '<form id="clip-form" class="clip-form" novalidate>' +
-        '<p class="label">Subir un clip</p>' +
+    var form = !ME
+      ? '<div class="clip-form clip-form--login"><p class="label">Subir un clip</p>' +
+          '<p>Para subir clips y votar tenés que entrar con tu usuario.</p>' +
+          '<button type="button" class="btn" data-action="login">Entrar</button></div>'
+      : '<form id="clip-form" class="clip-form" novalidate>' +
+        '<p class="label">Subir un clip · ' + esc(ME.nombre) + "</p>" +
         '<div class="field"><label for="f-titulo">Título</label><input id="f-titulo" name="titulo" maxlength="80" placeholder="Ej.: El caño de Paty" required></div>' +
-        '<div class="field"><label for="f-autor">Quién lo sube</label><select id="f-autor" name="autor" required>' +
-          options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), yo) + "</select></div>" +
         '<div class="field field--wide"><label for="f-url">Link del clip</label><input id="f-url" name="url" type="url" inputmode="url" placeholder="https://youtu.be/… · Instagram · TikTok · Drive"></div>' +
         '<div class="field field--wide"><label for="f-video">o subí el video <small>(MP4, MOV o WebM, hasta ' + MAX_VIDEO_MB + " MB)</small></label>" +
           '<input id="f-video" name="video" type="file" accept="video/mp4,video/quicktime,video/webm"' + (ONLINE ? "" : " disabled") + "></div>" +
         '<div class="form-actions"><button type="submit" class="btn">Subir clip</button><p id="clip-msg" class="form-msg" role="status"></p></div>' +
         (ONLINE
-          ? '<p class="form-note">Los clips y los votos se comparten con todo el grupo. Un voto por clip en cada celular, y no podés votar tus propios clips.</p>'
+          ? '<p class="form-note">Los clips y los votos se comparten con todo el grupo. Un voto por clip, y no podés votar tus propios clips.</p>'
           : '<p class="form-note"><strong>Modo de prueba:</strong> los clips y los votos quedan solo en este navegador y no se pueden subir videos. Para que vote todo el grupo, completá <code>js/config.js</code> con los datos de Supabase (ver LEEME.md).</p>') +
       "</form>";
 
@@ -1416,9 +1427,7 @@
       section(2, "Votaciones",
         (ONLINE && V.error ? '<p class="notice"><strong>No se pudieron cargar las votaciones.</strong> ' + esc(V.error) + "</p>" : "") +
         (ONLINE && !V.loaded ? '<p class="notice">Cargando votaciones…</p>' : votacionesAbiertas(V)),
-        isAdmin()
-          ? addBtn("votacion", "Abrir votación") + ' <button type="button" class="link-btn link-btn--muted" data-action="salir">Salir de admin</button>'
-          : '<button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Admin</button>",
+        isAdmin() ? addBtn("votacion", "Abrir votación") : asideLabel("Votan los socios con usuario"),
         "votaciones") +
       section(3, "Estadísticas de las votaciones", V.loaded ? estadisticasVotaciones(V) : "", asideLabel("Se ven al cerrar cada votación"), "estadisticas") +
       section(4, "Clip del año", form + '<div id="clips-grid" class="clips clips--vote"></div>', '<span class="label" id="clips-count"></span>', "clip") +
@@ -1621,15 +1630,12 @@
     }).join("");
     var body =
       '<p class="dlg-context">' + esc(m.rival) + " · " + fecha(m.fecha) + (jugado(m) ? " · " + m.gf + " – " + m.gc : "") + "</p>" +
-      '<div class="field"><label for="n-votante">¿Quién sos?</label><select id="n-votante" name="votante" required>' +
-        options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), "") + "</select></div>" +
-      '<p class="label dlg-sub">Notas del 1 al 10</p>' +
+      '<p class="label dlg-sub">Notas de ' + esc(ME.nombre) + " · del 1 al 10</p>" +
       '<div class="nota-rows">' + filas + "</div>" +
       '<p class="form-note">No podés ponerte nota a vos mismo. Si ya votaste, tu voto se reemplaza.</p>';
 
+    var votante = ME.nombre;
     var form = openDialog("Agregar nota", body, "Guardar notas", function (f) {
-      var votante = f.votante.value;
-      if (!votante) return "Elegí tu nombre.";
       var notas = {}, error = null, n = 0;
       m.titulares.forEach(function (t, i) {
         if (t.j === votante) return;
@@ -1643,9 +1649,9 @@
       if (ONLINE) {
         return remoteWrite(function () {
           return sb.from("notas").upsert({ partido_id: m.id, votante: votante, notas: notas }, { onConflict: "partido_id,votante" });
-        }, "Desde este celular ya votaste en este partido con otro nombre.").then(function (err) {
+        }).then(function (err) {
           if (!err) verId = m.id;
-          return err && /otra persona/.test(err) ? votante + " ya votó desde otro celular." : err;
+          return err;
         });
       }
       var all = storeGet(K.votos, {});
@@ -1656,9 +1662,8 @@
       verId = m.id;
     });
 
-    var sel = form.votante;
     function sync() {
-      var who = sel.value;
+      var who = votante;
       var prev = m.votos.filter(function (v) { return v.votante === who; })[0];
       form.querySelectorAll(".nota-row").forEach(function (row, i) {
         var self = row.getAttribute("data-j") === who;
@@ -1668,35 +1673,39 @@
         inp.value = !self && prev && prev.notas[m.titulares[i].j] != null ? prev.notas[m.titulares[i].j] : "";
       });
     }
-    sel.addEventListener("change", sync);
     sync();
   }
 
-  function dialogDorsal(nombre) {
+  // Remera (número + posición). Cada uno elige la suya; el admin puede cambiar la de cualquiera.
+  // primera = true: se abre sola la primera vez que alguien entra con su usuario.
+  function dialogDorsal(nombre, primera) {
+    var admin = isAdmin();
+    if (!admin || !nombre) nombre = ME.nombre;
+    var jugadores = admin ? F.plantel : F.plantel.filter(function (j) { return j.nombre === ME.nombre; });
     var body =
+      (primera ? '<p class="dlg-context">Elegí tu número y la posición en la que jugás.</p>' : "") +
       '<div class="dlg-grid dlg-grid--dorsal">' +
         '<div class="dorsal-preview" id="dorsal-preview"></div>' +
         "<div>" +
-          '<div class="field"><label for="d-jug">Jugador</label><select id="d-jug" name="jugador">' +
-            options(F.plantel.map(function (j) { return { v: j.nombre, l: j.nombre + (j.dorsal != null ? " · " + j.dorsal : "") }; }), nombre || F.plantel[0].nombre) + "</select></div>" +
+          '<div class="field"><label for="d-jug">Jugador</label><select id="d-jug" name="jugador"' + (admin ? "" : " disabled") + ">" +
+            options(jugadores.map(function (j) { return { v: j.nombre, l: j.nombre + (j.dorsal != null ? " · " + j.dorsal : "") }; }), nombre) + "</select></div>" +
           '<div class="field"><label for="d-num">Número</label><input id="d-num" name="dorsal" type="number" min="1" max="99" inputmode="numeric" required></div>' +
-          '<div class="field"><label for="d-pos">Posición</label><select id="d-pos" name="pos">' + options([{ v: "", l: "A definir" }].concat(POS.map(function (p) { return { v: p, l: POS_LABEL[p] }; })), "") + "</select></div>" +
+          '<div class="field"><label for="d-pos">Posición</label><select id="d-pos" name="pos">' + options([{ v: "", l: primera ? "Elegí tu posición" : "A definir" }].concat(POS.map(function (p) { return { v: p, l: POS_LABEL[p] }; })), "") + "</select></div>" +
           '<p class="form-note" id="d-ocupados"></p>' +
         "</div>" +
       "</div>";
 
-    var form = openDialog("Agregar dorsal", body, "Guardar dorsal", function (f) {
+    var form = openDialog(primera ? "Elegí tu remera" : "Remera", body, "Guardar remera", function (f) {
       var who = f.jugador.value;
       var num = numOrNull(f.dorsal.value);
       if (num === null || isNaN(num) || num % 1 || num < 1 || num > 99) return "El número tiene que ser entero, del 1 al 99.";
+      if (primera && !f.pos.value) return "Elegí tu posición.";
       var duenio = F.plantel.filter(function (j) { return j.dorsal === num && j.nombre !== who; })[0];
       if (duenio) return "El " + num + " ya lo tiene " + duenio.nombre + ". Elegí otro.";
       if (ONLINE) {
         return remoteWrite(function () {
           return sb.from("dorsales").upsert({ nombre: who, dorsal: num, pos: f.pos.value || null }, { onConflict: "nombre" });
-        }, "El " + num + " ya lo eligió otro jugador.").then(function (err) {
-          return err && /otra persona/.test(err) ? "El número de " + who + " lo eligió otra persona desde su celular; solo esa persona lo puede cambiar." : err;
-        });
+        }, "El " + num + " ya lo eligió otro jugador.");
       }
       var over = storeGet(K.dorsales, {});
       over[who] = { dorsal: num, pos: f.pos.value || null };
@@ -1752,46 +1761,101 @@
     });
   }
 
-  /* ----- admin de asistencia ----- */
-  function dialogAdmin() {
-    if (ONLINE) {
-      openDialog("Entrar como admin",
-        '<div class="field"><label for="a-pin">PIN de admin</label><input id="a-pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required></div>',
-        "Entrar", function (f) {
-          var pin = f.pin.value.trim();
-          if (!pin) return "Poné el PIN.";
-          return sb.rpc("admin_entrar", { p_pin: pin }).then(function (r) {
+  /* ----- usuarios: entrar, mi cuenta, salir ----- */
+  function dialogLogin(despues) {
+    var body =
+      '<div class="field"><label for="l-nombre">Usuario</label><select id="l-nombre" name="nombre" autocomplete="username" required>' +
+        options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), "") + "</select></div>" +
+      '<div class="field"><label for="l-clave">Contraseña</label><input id="l-clave" name="clave" type="password" autocomplete="current-password" required></div>' +
+      (ONLINE ? "" : '<p class="form-note"><strong>Modo de prueba:</strong> sin la base conectada cualquier contraseña sirve. ' + esc(ADMIN_PRUEBA) + " es el admin.</p>");
+    openDialog("Entrar", body, "Entrar", function (f) {
+      var n = f.nombre.value, clave = f.clave.value;
+      if (!n) return "Elegí tu nombre.";
+      if (!clave) return "Poné tu contraseña.";
+      var entrar = ONLINE
+        ? sb.auth.signInWithPassword({ email: emailDe(n), password: clave }).then(function (r) {
             check(r);
-            if (!r.data || !r.data.ok) return (r.data && r.data.error) || "PIN incorrecto.";
-            setAdmin(true, pin);
-          }).catch(function (e) { return friendly(e); });
-        }, "El PIN lo verifica la base. Después de 10 intentos fallidos se bloquea 15 minutos.");
-      return;
-    }
-    var crear = !A.adminPinHash;
-    var body = crear
-      ? '<p class="dlg-context">Creá tu PIN de admin</p>' +
-        '<p class="form-note">Con este PIN solo vos vas a poder registrar juntadas. Queda guardado (cifrado) en <code>asistencia.js</code> cuando lo descargues.</p>' +
-        '<div class="field"><label for="a-pin">PIN nuevo</label><input id="a-pin" name="pin" type="password" inputmode="numeric" autocomplete="new-password" minlength="4" required></div>' +
-        '<div class="field"><label for="a-pin2">Repetí el PIN</label><input id="a-pin2" name="pin2" type="password" inputmode="numeric" autocomplete="new-password" required></div>'
-      : '<div class="field"><label for="a-pin">PIN de admin</label><input id="a-pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required></div>';
-    openDialog(crear ? "Activar modo admin" : "Entrar como admin", body, crear ? "Crear PIN y entrar" : "Entrar", function (f) {
-      var pin = f.pin.value.trim();
-      if (pin.length < 4) return "El PIN tiene que tener al menos 4 caracteres.";
-      if (crear && pin !== f.pin2.value.trim()) return "Los PIN no coinciden.";
-      return sha256(pin).then(function (h) {
-        if (crear) {
-          var obj = cloneA();
-          obj.adminPinHash = h;
-          if (!saveA(obj)) return "No se pudo guardar en este navegador.";
-        } else if (h !== A.adminPinHash) {
-          return "PIN incorrecto.";
-        }
-        setAdmin(true);
-      }, function () { return "Este navegador no permite verificar el PIN (abrí la página por https o localhost)."; });
+            return loadMe().then(function () {
+              if (!ME) { sb.auth.signOut(); return "Ese usuario no está habilitado en La Chancha."; }
+            });
+          }).catch(function (e) { return friendly(e); })
+        : Promise.resolve(storeSet(KU, n)).then(function () { return loadMe(); }).then(function () { return null; });
+      return entrar.then(function (err) {
+        if (err) return err;
+        recargarTodo().then(function () {
+          if (!miRemera()) dialogDorsal(ME.nombre, true);
+          else if (typeof despues === "function") despues();
+        });
+      });
+    }, ONLINE ? "Tu usuario y contraseña te los pasa el admin. Después podés cambiar la contraseña." : "");
+  }
+
+  function miRemera() {
+    var j = ME && F.jug[ME.nombre];
+    return !!(j && j.dorsal != null);
+  }
+
+  function dialogCuenta() {
+    var j = F.jug[ME.nombre] || {};
+    var body =
+      '<div class="cuenta">' +
+        '<span class="user-avatar user-avatar--lg" aria-hidden="true">' + esc(initials(ME.nombre)) + "</span>" +
+        '<div><p class="dlg-context">' + esc(ME.nombre) + "</p>" +
+        '<p class="form-note">' + (ME.admin ? "Admin del club · " : "Socio · ") +
+          (j.dorsal != null ? "Remera " + j.dorsal + (j.pos ? " · " + POS_LABEL[j.pos] : "") : "Sin remera") +
+          ' · <button type="button" class="link-btn" data-action="dorsal" data-nombre="' + esc(ME.nombre) + '">Cambiar remera</button></p></div>' +
+      "</div>" +
+      '<p class="label dlg-sub">Cambiar contraseña</p>' +
+      '<div class="dlg-grid">' +
+        '<div class="field"><label for="c-clave">Nueva contraseña</label><input id="c-clave" name="clave" type="password" autocomplete="new-password" minlength="8"></div>' +
+        '<div class="field"><label for="c-clave2">Repetila</label><input id="c-clave2" name="clave2" type="password" autocomplete="new-password"></div>' +
+      "</div>" +
+      '<p class="form-note">Mínimo 8 caracteres. Si no querés cambiarla, dejalo vacío.</p>' +
+      '<p><button type="button" class="btn btn--ghost" data-action="salir">Salir de la cuenta</button></p>';
+    openDialog("Mi cuenta", body, "Guardar contraseña", function (f) {
+      var c1 = f.clave.value, c2 = f.clave2.value;
+      if (!c1) return "Poné la contraseña nueva.";
+      if (c1.length < 8) return "La contraseña tiene que tener al menos 8 caracteres.";
+      if (c1 !== c2) return "Las contraseñas no coinciden.";
+      if (!ONLINE) return "En el modo de prueba no hay contraseñas.";
+      return sb.auth.updateUser({ password: c1 }).then(function (r) {
+        check(r);
+        alert("Listo, contraseña cambiada.");
+      }).catch(function (e) { return friendly(e); });
     }, "");
   }
 
+  function salir() {
+    var fin = ONLINE ? sb.auth.signOut().catch(function () {}) : Promise.resolve(storeSet(KU, ""));
+    fin.then(function () { ME = null; return recargarTodo(); });
+  }
+
+  // Editar una categoría (solo el admin)
+  function dialogEditarPremio(id, i) {
+    var p = getPremios().filter(function (x) { return id ? String(x.pid) === String(id) : String(x.local) === String(i); })[0];
+    if (!p) return;
+    var body =
+      '<div class="field"><label for="ep-titulo">Categoría</label><input id="ep-titulo" name="titulo" maxlength="50" value="' + esc(p.titulo) + '" required></div>' +
+      '<div class="field"><label for="ep-detalle">Detalle <small>(opcional)</small></label><input id="ep-detalle" name="detalle" maxlength="120" value="' + esc(p.detalle) + '"></div>' +
+      '<p class="label dlg-sub">¿Cómo se vota?</p>' +
+      '<div class="tipo-opts">' +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="individual"' + (p.tipo !== "dupla" ? " checked" : "") + "><span><strong>A una persona</strong><small>Cada uno elige a un socio.</small></span></label>" +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="dupla"' + (p.tipo === "dupla" ? " checked" : "") + "><span><strong>A una dupla</strong><small>Cada uno elige una pareja. Gana una dupla.</small></span></label>" +
+      "</div>" +
+      '<div class="field"><label for="ep-ganador">Ganador <small>(dejalo vacío si se vota)</small></label><input id="ep-ganador" name="ganador" maxlength="40" list="dl-socios-ep" value="' + esc(p.ganador) + '"></div>' +
+      '<datalist id="dl-socios-ep">' + options(NOMBRES) + "</datalist>" +
+      '<p class="form-note">Si la categoría ya está en una votación abierta, los cambios se ven en la próxima.</p>';
+    openDialog("Editar categoría", body, "Guardar cambios", function (f) {
+      var t = f.titulo.value.trim(), g = f.ganador.value.trim(), tipo = f.querySelector('input[name="tipo"]:checked').value;
+      if (!t) return "Poné el nombre de la categoría.";
+      var cambios = { titulo: t, tipo: tipo, ganador: g || null, detalle: f.detalle.value.trim() || null };
+      if (ONLINE) return remoteWrite(function () { return sb.from("premios").update(cambios).eq("id", p.pid); });
+      var list = storeGet(K.premios, []);
+      if (!list[p.local]) return "No se encontró la categoría.";
+      Object.assign(list[p.local], { titulo: t, tipo: tipo, ganador: g, detalle: f.detalle.value.trim() });
+      if (!storeSet(K.premios, list)) return "No se pudo guardar en este navegador.";
+    }, "");
+  }
   function dialogJuntada() {
     var checks = A.socios.map(function (n, i) {
       return '<label class="check"><input type="checkbox" name="p" value="' + esc(n) + '"><span>' + esc(n) + "</span></label>";
@@ -1849,16 +1913,22 @@
   }
 
   /* ================= eventos ================= */
+  var NECESITA_USUARIO = ["partido", "nota", "dorsal", "premio", "votar-premio", "votar", "quitar-partido", "quitar-premio", "quitar-clip"];
+
   document.addEventListener("click", function (e) {
     var b = e.target.closest("[data-action]");
     if (!b) return;
     var a = b.getAttribute("data-action"), id = b.getAttribute("data-id");
-    if (a === "partido") dialogPartido();
+    // Todo lo que carga o vota necesita usuario: sin sesión, primero se entra
+    if (!ME && NECESITA_USUARIO.indexOf(a) >= 0) { dialogLogin(); return; }
+    if (a === "login") dialogLogin();
+    else if (a === "cuenta" && ME) dialogCuenta();
+    else if (a === "salir") { if (dlg && dlg.open) dlg.close(); salir(); }
+    else if (a === "partido") dialogPartido();
     else if (a === "nota") dialogNota(id);
     else if (a === "dorsal") dialogDorsal(b.getAttribute("data-nombre"));
     else if (a === "premio") dialogPremio();
-    else if (a === "admin") dialogAdmin();
-    else if (a === "salir") { setAdmin(false); render(); }
+    else if (a === "editar-premio" && isAdmin()) dialogEditarPremio(id, b.getAttribute("data-i"));
     else if (a === "votacion" && isAdmin()) dialogVotacion();
     else if (a === "votar-premio") dialogVotar(id);
     else if ((a === "cerrar-votacion" || a === "borrar-votacion") && isAdmin()) {
@@ -1918,10 +1988,10 @@
     e.preventDefault();
     var form = e.target, msg = document.getElementById("clip-msg"), btn = form.querySelector('[type="submit"]');
     function fail(t) { msg.textContent = t; msg.className = "form-msg is-error"; }
-    var titulo = form.titulo.value.trim(), autor = form.autor.value, url = form.url.value.trim();
+    if (!ME) return dialogLogin();
+    var titulo = form.titulo.value.trim(), autor = ME.nombre, url = form.url.value.trim();
     var file = form.video && form.video.files && form.video.files[0];
     if (!titulo) return fail("Poné un título.");
-    if (!autor) return fail("Elegí tu nombre.");
     if (url) {
       var ok = false;
       try { var u = new URL(url); ok = u.protocol === "https:" || u.protocol === "http:"; } catch (err) {}
@@ -1929,7 +1999,6 @@
     }
     if (!url && !file) return fail("Pegá un link o elegí un video.");
     if (file && file.size > MAX_VIDEO_MB * 1024 * 1024) return fail("El video pesa más de " + MAX_VIDEO_MB + " MB. Subilo a YouTube o Drive y pegá el link.");
-    storeSet("chancha.yo", autor);
     btn.disabled = true;
     msg.textContent = file ? "Subiendo video…" : "Guardando…"; msg.className = "form-msg";
     ClipStore.add({ titulo: titulo, autor: autor, url: url, file: file }).then(function () {
@@ -1952,20 +2021,41 @@
     if (page === "awards") { renderClips(); if (first) loadClips(); }
   }
 
+  function renderChrome() {
+    document.getElementById("header").outerHTML = header();
+    document.getElementById("footer").outerHTML = footer();
+  }
+
+  // Vuelve a leer quién sos y los datos del grupo, y redibuja todo (al entrar o salir)
+  function recargarTodo() {
+    return loadMe().then(function () {
+      if (!ONLINE) return;
+      return Promise.all([loadAsistRemote(), loadRemote(), page === "awards" ? loadVotaciones() : null]);
+    }).then(function () {
+      render();
+      renderChrome();
+      if (page === "awards") loadClips();
+    });
+  }
+
   document.getElementById("header").outerHTML = header();
   main = document.getElementById("main");
   render(true);
   document.getElementById("footer").outerHTML = footer();
-  if (ONLINE) {
-    Promise.all([
+  loadMe().then(function () {
+    if (!ONLINE) return;
+    return Promise.all([
       loadAsistRemote(),
-      page === "futbol" || page === "awards" ? loadRemote() : null,
+      ME || page === "futbol" || page === "awards" ? loadRemote() : null,
       page === "awards" ? loadVotaciones() : null
-    ]).then(function () {
-      render();
-      document.getElementById("footer").outerHTML = footer();
-    });
-  }
+    ]);
+  }).then(function () {
+    render();
+    renderChrome();
+    if (page === "awards" && ME) loadClips();
+    // La primera vez que alguien entra con su usuario, elige su remera
+    if (ME && REMOTE.loaded && !REMOTE.error && !miRemera()) dialogDorsal(ME.nombre, true);
+  });
 
   /* fade al entrar */
   var els = main.querySelectorAll(".reveal");
