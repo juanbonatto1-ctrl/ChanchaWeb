@@ -260,16 +260,20 @@
     }).sort(function (a, b) { return b.fecha.localeCompare(a.fecha) || String(b.id).localeCompare(String(a.id)); });
   }
 
-  function calcStats(partidos) {
+  // Los extras (jugaron solo ese partido, no son del plantel) no entran en las estadísticas individuales
+  function calcStats(partidos, jug) {
     var s = { pj: 0, G: 0, E: 0, P: 0, gf: 0, gc: 0 }, by = {};
+    function delPlantel(n) { return !jug || !!jug[n]; }
     partidos.filter(jugado).forEach(function (m) {
       s.pj++; s[res(m)]++; s.gf += m.gf; s.gc += m.gc;
       m.titulares.forEach(function (t) {
+        if (!delPlantel(t.j)) return;
         var r = by[t.j] || (by[t.j] = { nombre: t.j, pj: 0, goles: 0, sum: 0, n: 0 });
         r.pj++; r.goles += t.goles || 0;
         if (t.nota != null) { r.sum += t.nota; r.n++; }
       });
       Object.keys(m.golesSuplentes || {}).forEach(function (n) {
+        if (!delPlantel(n)) return;
         var r = by[n] || (by[n] = { nombre: n, pj: 0, goles: 0, sum: 0, n: 0 });
         r.goles += m.golesSuplentes[n];
       });
@@ -286,7 +290,7 @@
     var plantel = getPlantel(), jug = {};
     plantel.forEach(function (j) { jug[j.nombre] = j; });
     var partidos = getPartidos();
-    F = { plantel: plantel, jug: jug, partidos: partidos, ST: calcStats(partidos), hayEjemplo: partidos.some(function (p) { return p.ejemplo; }) };
+    F = { plantel: plantel, jug: jug, partidos: partidos, ST: calcStats(partidos, jug), hayEjemplo: partidos.some(function (p) { return p.ejemplo; }) };
   }
   function dorsalOf(n) { var j = F.jug[n]; return j && j.dorsal != null ? j.dorsal : null; }
   function shirtLabel(n) { var d = dorsalOf(n); return d != null ? d : initials(n); }
@@ -643,6 +647,9 @@
     return '<div class="pitch" role="img" aria-label="Formación de La Chancha contra ' + esc(m.rival) + '">' + pitchSVG() + markers + "</div>";
   }
 
+  function esExtra(n) { return !!(F && F.jug && !F.jug[n]); }
+  function extraTag(n) { return esExtra(n) ? ' <small class="ml-extra">extra</small>' : ""; }
+
   function matchCard(m) {
     var ok = jugado(m);
     var goleadores = m.titulares.filter(function (t) { return t.goles; }).map(function (t) { return esc(t.j) + (t.goles > 1 ? " (" + t.goles + ")" : ""); })
@@ -650,7 +657,7 @@
     var best = figuraDe(m);
     var lista = m.titulares.slice().sort(function (a, b) { return ORDEN.indexOf(b.pos) - ORDEN.indexOf(a.pos); }).map(function (t) {
       var d = dorsalOf(t.j);
-      return '<li><span class="ml-dorsal">' + (d != null ? d : "–") + '</span><span class="ml-name">' + esc(t.j) + '</span><span class="ml-pos">' + esc(t.pos || "") + "</span>" +
+      return '<li><span class="ml-dorsal">' + (d != null ? d : "–") + '</span><span class="ml-name">' + esc(t.j) + extraTag(t.j) + '</span><span class="ml-pos">' + esc(t.pos || "") + "</span>" +
         '<span class="ml-nota' + (t.nota != null && t.nota >= 8 ? " is-high" : "") + '">' + (t.nota != null ? nota1(t.nota) : "–") + "</span>" +
         '<span class="ml-votos">' + (t.nVotos ? plural(t.nVotos, "voto", "votos") : "sin votos") + "</span></li>";
     }).join("");
@@ -666,7 +673,7 @@
         '<dl class="match-meta">' +
           (goleadores.length ? "<div><dt>Goles</dt><dd>" + goleadores.join(", ") + "</dd></div>" : "") +
           (best ? "<div><dt>Figura</dt><dd>" + esc(best.j) + " · " + nota1(best.nota) + "</dd></div>" : "") +
-          (m.suplentes && m.suplentes.length ? "<div><dt>Suplentes</dt><dd>" + m.suplentes.map(esc).join(", ") + "</dd></div>" : "") +
+          (m.suplentes && m.suplentes.length ? "<div><dt>Suplentes</dt><dd>" + m.suplentes.map(function (n) { return esc(n) + extraTag(n); }).join(", ") + "</dd></div>" : "") +
         "</dl>" +
         '<div class="match-sub"><p class="label">Titulares y notas</p>' +
           (ok ? '<button type="button" class="btn btn--small" data-action="nota" data-id="' + esc(m.id) + '">Agregar nota</button>' : "") +
@@ -1429,6 +1436,7 @@
       document.body.appendChild(dlg);
       dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
     }
+    dlg.className = "dlg";
     dlg.innerHTML =
       '<form class="dlg-form" novalidate>' +
         '<header class="dlg-head"><h2>' + title + '</h2><button type="button" class="dlg-close" data-close aria-label="Cerrar">×</button></header>' +
@@ -1459,14 +1467,26 @@
   function numOrNull(v) { v = String(v).trim().replace(",", "."); if (v === "") return null; var n = Number(v); return isFinite(n) ? n : NaN; }
 
   function dialogPartido() {
-    var filas = F.plantel.map(function (j, i) {
+    var EST = [{ v: "", l: "No juega" }, { v: "T", l: "Titular" }, { v: "S", l: "Suplente" }];
+    var nRow = 0;
+    // Fila de un jugador. Si extra = true, el nombre se escribe (juega solo este partido).
+    function fila(nombre, pos, extra) {
+      var i = nRow++, who = extra ? "Extra" : esc(nombre);
       return (
-        '<tr><td class="pf-name">' + esc(j.nombre) + "</td>" +
-        '<td><select name="estado-' + i + '" aria-label="' + esc(j.nombre) + ': participación">' + options([{ v: "", l: "No juega" }, { v: "T", l: "Titular" }, { v: "S", l: "Suplente" }], "") + "</select></td>" +
-        '<td><select name="pos-' + i + '" aria-label="' + esc(j.nombre) + ': posición">' + options(POS, j.pos || "MED") + "</select></td>" +
-        '<td><input name="goles-' + i + '" type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="0" disabled aria-label="' + esc(j.nombre) + ': goles"></td></tr>'
+        '<div class="pf-row' + (extra ? " is-extra" : "") + '" data-i="' + i + '"' + (extra ? "" : ' data-nombre="' + esc(nombre) + '"') + ">" +
+          (extra
+            ? '<div class="pf-name pf-name--extra"><input name="nombre-' + i + '" maxlength="40" placeholder="Nombre del extra" aria-label="Nombre del extra">' +
+              '<button type="button" class="pf-quitar" data-quitar="' + i + '" aria-label="Quitar extra">×</button></div>'
+            : '<span class="pf-name">' + esc(nombre) + "</span>") +
+          '<select name="estado-' + i + '" aria-label="' + who + ': participación">' + options(EST, extra ? "T" : "") + "</select>" +
+          '<select name="pos-' + i + '" aria-label="' + who + ': posición">' + options(POS, pos || "MED") + "</select>" +
+          '<div class="pf-goles"><button type="button" data-step="-1" data-for="' + i + '" aria-label="' + who + ': un gol menos">−</button>' +
+            '<input name="goles-' + i + '" type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="0" disabled aria-label="' + who + ': goles">' +
+            '<button type="button" data-step="1" data-for="' + i + '" aria-label="' + who + ': un gol más">+</button></div>' +
+        "</div>"
       );
-    }).join("");
+    }
+    var filas = F.plantel.map(function (j) { return fila(j.nombre, j.pos, false); }).join("");
     var body =
       '<div class="dlg-grid">' +
         '<div class="field"><label for="p-fecha">Fecha</label><input id="p-fecha" name="fecha" type="date" value="' + hoy() + '" required></div>' +
@@ -1477,18 +1497,30 @@
           '<label class="res-por" for="p-por">por</label><input id="p-por" name="por" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="1" aria-label="Diferencia de goles" disabled></div></div>' +
       "</div>" +
       '<p class="label dlg-sub">Quiénes jugaron y quién hizo los goles</p>' +
-      '<div class="table-wrap"><table class="pf-table"><thead><tr><th>Jugador</th><th>Juega</th><th>Pos.</th><th>Goles</th></tr></thead><tbody>' + filas + "</tbody></table></div>" +
+      '<div class="pf-list" id="pf-list"><div class="pf-row pf-head" aria-hidden="true"><span>Jugador</span><span>Juega</span><span>Posición</span><span>Goles</span></div>' + filas + "</div>" +
+      '<button type="button" class="btn btn--ghost btn--small pf-add" id="pf-add">+ Agregar extra</button>' +
+      '<p class="form-note pf-add-note">Un extra es alguien que juega solo este partido: aparece en la formación y se le pueden poner notas, pero no entra en las estadísticas.</p>' +
       '<p class="res-preview" id="p-preview" aria-live="polite"></p>' +
       '<p class="form-note">Los goles de La Chancha son la suma de los goles de cada jugador. Con “ganamos / perdimos por” se calculan los del rival.</p>';
 
     function leer(f) {
-      var tit = [], sup = [], golesSup = {}, sumGoles = 0, err = null;
-      F.plantel.forEach(function (j, i) {
+      var tit = [], sup = [], golesSup = {}, sumGoles = 0, err = null, usados = {};
+      F.plantel.forEach(function (j) { usados[j.nombre.toLowerCase()] = true; });
+      Array.prototype.forEach.call(f.querySelectorAll(".pf-row[data-i]"), function (row) {
+        var i = row.getAttribute("data-i");
         var est = f["estado-" + i].value;
+        if (!est) return;
+        var nombre = row.getAttribute("data-nombre");
+        if (nombre == null) {
+          nombre = f["nombre-" + i].value.trim().replace(/\s+/g, " ");
+          if (!nombre) { err = err || "Poné el nombre del extra (o quitalo)."; return; }
+          if (usados[nombre.toLowerCase()]) { err = err || "“" + nombre + "” ya está en la lista. Ponele otro nombre al extra."; return; }
+          usados[nombre.toLowerCase()] = true;
+        }
         var g = numOrNull(f["goles-" + i].value) || 0;
-        if (est && (isNaN(g) || g < 0 || g % 1)) { err = "Los goles de " + j.nombre + " tienen que ser un número entero."; return; }
-        if (est === "T") { tit.push({ j: j.nombre, pos: f["pos-" + i].value, goles: g || undefined }); sumGoles += g; }
-        else if (est === "S") { sup.push(j.nombre); if (g) { golesSup[j.nombre] = g; sumGoles += g; } }
+        if (isNaN(g) || g < 0 || g % 1) { err = err || "Los goles de " + nombre + " tienen que ser un número entero."; return; }
+        if (est === "T") { tit.push({ j: nombre, pos: f["pos-" + i].value, goles: g || undefined }); sumGoles += g; }
+        else if (est === "S") { sup.push(nombre); if (g) { golesSup[nombre] = g; sumGoles += g; } }
       });
       var res = f.res.value, por = numOrNull(f.por.value), gf = null, gc = null;
       if (res) {
@@ -1529,15 +1561,19 @@
       verId = id;
     });
 
+    dlg.classList.add("dlg--wide");
     var preview = document.getElementById("p-preview");
     function sync() {
       var res = form.res.value;
       form.por.disabled = !res || res === "E";
       if (form.por.disabled) form.por.value = "";
-      F.plantel.forEach(function (j, i) {
-        var inp = form["goles-" + i];
-        inp.disabled = !form["estado-" + i].value || !res;
+      Array.prototype.forEach.call(form.querySelectorAll(".pf-row[data-i]"), function (row) {
+        var i = row.getAttribute("data-i"), inp = form["goles-" + i];
+        var juega = !!form["estado-" + i].value;
+        row.classList.toggle("is-on", juega);
+        inp.disabled = !juega || !res;
         if (inp.disabled) inp.value = "";
+        row.querySelectorAll("[data-step]").forEach(function (b) { b.disabled = inp.disabled; });
       });
       var r = leer(form), rival = form.rival.value.trim() || "Rival";
       if (!res) preview.innerHTML = '<span class="label">Próximo partido</span> La Chancha vs ' + esc(rival);
@@ -1548,6 +1584,25 @@
     }
     form.addEventListener("input", sync);
     form.addEventListener("change", sync);
+    var list = document.getElementById("pf-list");
+    document.getElementById("pf-add").addEventListener("click", function () {
+      list.insertAdjacentHTML("beforeend", fila("", "MED", true));
+      var nuevo = list.lastElementChild.querySelector("input");
+      sync();
+      nuevo.focus();
+    });
+    list.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-step], [data-quitar]");
+      if (!b || b.disabled) return;
+      if (b.hasAttribute("data-quitar")) {
+        var row = list.querySelector('.pf-row[data-i="' + b.getAttribute("data-quitar") + '"]');
+        if (row) row.remove();
+      } else {
+        var inp = form["goles-" + b.getAttribute("data-for")];
+        inp.value = Math.max(0, Math.min(30, (numOrNull(inp.value) || 0) + +b.getAttribute("data-step"))) || "";
+      }
+      sync();
+    });
     sync();
   }
 

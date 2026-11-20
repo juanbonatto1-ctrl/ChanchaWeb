@@ -529,6 +529,34 @@ img { display: block; max-width: 100%; height: auto; }
 .res-warn { display: block; font-family: var(--font-body); font-size: var(--fs-xs); color: var(--color-perdio); margin-top: var(--space-1); }
 .pf-table input:disabled { opacity: 0.4; }
 
+/* Agregar partido: quiénes jugaron */
+.dlg--wide { width: min(820px, calc(100% - 24px)); }
+.pf-list { border-top: var(--line) solid var(--color-line-strong); }
+.pf-row { display: grid; grid-template-columns: minmax(8rem, 1.2fr) 1fr 1fr 9rem; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-2); border-bottom: var(--line) solid var(--color-line); transition: background var(--dur-fast); }
+.pf-row.is-on { background: var(--color-rosa-claro); }
+.pf-head { padding-block: var(--space-2); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-ink-soft); }
+.pf-name { font-family: var(--font-display); font-size: 1.0625rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-name--extra { display: flex; gap: var(--space-1); align-items: center; }
+.dlg .pf-row select, .dlg .pf-row input { padding: 0.6rem 0.7rem; font-size: 1rem; min-width: 0; }
+.pf-quitar { flex: none; width: 2.25rem; height: 2.25rem; border: var(--line) solid var(--color-line); border-radius: var(--radius); background: var(--color-surface); color: var(--color-ink-soft); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.pf-quitar:hover { color: var(--color-perdio); border-color: var(--color-perdio); }
+.pf-goles { display: grid; grid-template-columns: 2.5rem 1fr 2.5rem; border: var(--line) solid var(--color-line); border-radius: var(--radius); background: var(--color-surface); overflow: hidden; }
+.pf-goles button { border: 0; background: none; font: inherit; font-size: 1.25rem; line-height: 1; color: var(--color-ink); cursor: pointer; }
+.pf-goles button:hover:not(:disabled) { background: var(--color-rosa-claro); }
+.pf-goles button:disabled { opacity: 0.3; cursor: default; }
+.dlg .pf-goles input { border: 0; border-radius: 0; text-align: center; padding-inline: 0; font-family: var(--font-data); font-size: 1.125rem; font-weight: 600; -moz-appearance: textfield; appearance: textfield; background: transparent; }
+.pf-goles input::-webkit-outer-spin-button, .pf-goles input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pf-row.is-extra .pf-name--extra input { font-family: var(--font-display); }
+.pf-add { align-self: flex-start; margin-top: calc(var(--space-2) * -1); }
+.pf-add-note { margin-top: calc(var(--space-3) * -1); }
+.ml-extra { font-family: var(--font-data); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-rosa-ink); border: var(--line) solid var(--color-rosa); border-radius: 999px; padding: 0 0.4rem; vertical-align: 1px; }
+@media (max-width: 620px) {
+  .pf-head { display: none; }
+  .pf-row { grid-template-columns: 1fr 1fr; gap: var(--space-2); padding: var(--space-3) var(--space-1); }
+  .pf-row .pf-name { grid-column: 1 / -1; }
+  .pf-goles { grid-column: 1 / -1; grid-template-columns: 3rem 1fr 3rem; }
+}
+
 .pf-table { width: 100%; border-collapse: collapse; }
 .pf-table th { text-align: left; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-ink-soft); padding: var(--space-1) var(--space-1) var(--space-2); border-bottom: var(--line) solid var(--color-line-strong); }
 .pf-table td { padding: var(--space-1); border-bottom: var(--line) solid var(--color-line); }
