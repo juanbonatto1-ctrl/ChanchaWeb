@@ -53,8 +53,9 @@ Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en
 
 ### Votaciones de los Chancha Awards
 
-- En Chancha Awards → **Votaciones**, tocá **Admin** y entrá con tu PIN. Después tocá **Nueva votación** y elegí si se vota **a una persona** o **a una dupla**.
-- Cada uno toca **Votar**, elige su nombre y vota. Nunca puede votarse a sí mismo ni estar en la dupla que vota, y vota una vez por votación, aunque puede cambiar su voto mientras siga abierta.
+- Las categorías se cargan con **Agregar premio**: cada una dice si se vota **a una persona** o **a una dupla**. Si le ponés ganador, no se vota.
+- En **Votaciones**, tocá **Admin**, entrá con tu PIN y tocá **Abrir votación**. Entran todas las categorías sin ganador (podés destildar alguna).
+- Cada uno toca **Votar**, elige su nombre y completa la boleta con todas las categorías de una vez. Puede dejar alguna vacía. Nunca puede votarse a sí mismo ni estar en la dupla que vota. Puede cambiar su boleta mientras siga abierta.
 - Mientras está abierta solo se ve cuántos votaron y quiénes faltan. Los votos son secretos.
 - Cuando la cerrás (**Cerrar y ver resultados**) aparecen el ganador y las **Estadísticas**. Si hay empate, ganan todos los empatados.
 

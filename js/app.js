@@ -190,7 +190,7 @@
       sb.from("partidos").select("id,created_by,fecha,rival,torneo,gf,gc,titulares,suplentes,goles_suplentes"),
       sb.from("notas").select("partido_id,votante,user_id,notas"),
       sb.from("dorsales").select("nombre,dorsal,pos,user_id"),
-      sb.from("premios").select("id,created_by,titulo,ganador,detalle,created_at").order("created_at"),
+      sb.from("premios").select("id,created_by,titulo,tipo,ganador,detalle,created_at").order("created_at"),
       sb.auth.getSession()
     ]).then(function (r) {
       for (var i = 0; i < 4; i++) check(r[i]);
@@ -209,7 +209,7 @@
       });
       REMOTE.dorsales = {};
       r[2].data.forEach(function (d) { REMOTE.dorsales[d.nombre] = { dorsal: d.dorsal, pos: d.pos, mio: d.user_id === uid }; });
-      REMOTE.premios = r[3].data.map(function (p) { return { id: p.id, titulo: p.titulo, ganador: p.ganador, detalle: p.detalle, mio: p.created_by === uid }; });
+      REMOTE.premios = r[3].data.map(function (p) { return { id: p.id, titulo: p.titulo, tipo: p.tipo || "individual", ganador: p.ganador || "", detalle: p.detalle, mio: p.created_by === uid }; });
       REMOTE.error = null;
     }).catch(function (e) {
       REMOTE.error = friendly(e);
@@ -978,27 +978,52 @@
   }
 
   /* ================= VOTACIONES (Chancha Awards) =================
-     El admin (PIN) crea y cierra votaciones. Cada socio vota una vez y no a sí mismo.
-     "individual" = se vota a una persona · "dupla" = se vota a una pareja.
+     El admin (PIN) abre UNA votación con todas las categorías sin ganador ("Agregar premio").
+     Cada socio completa la boleta (todas las categorías de una vez) y nunca se vota a sí mismo.
+     Categoría "individual" = se vota a una persona · "dupla" = se vota a una pareja.
      Votos secretos hasta que se cierra. Empate = ganan todos los empatados. */
-  var KV = { lista: "chancha.votaciones", votos: "chancha.votacionesVotos" };
+  var KV = { lista: "chancha.votaciones2", votos: "chancha.votacionesVotos2" };
   var VOT = { loaded: !ONLINE, error: null, lista: [], participacion: {}, votos: {} };
+
+  // Categorías cargadas con "Agregar premio" (las que no tienen ganador se votan)
+  function getPremios() {
+    var out = [];
+    (D.premios || []).forEach(function (p, i) {
+      out.push({ id: "d" + i, titulo: p.titulo, tipo: p.tipo || "individual", ganador: p.ganador || "", detalle: p.detalle || "" });
+    });
+    if (ONLINE) {
+      REMOTE.premios.forEach(function (p) {
+        out.push({ id: p.id, titulo: p.titulo, tipo: p.tipo || "individual", ganador: p.ganador || "", detalle: p.detalle || "", local: p.mio ? 0 : null, pid: p.id });
+      });
+    } else {
+      storeGet(K.premios, []).forEach(function (p, i) {
+        out.push({ id: p.id || "l" + i, titulo: p.titulo, tipo: p.tipo || "individual", ganador: p.ganador || "", detalle: p.detalle || "", local: i });
+      });
+    }
+    return out;
+  }
+  function aVotar() { return getPremios().filter(function (p) { return !p.ganador; }); }
 
   function loadVotaciones() {
     if (!ONLINE) return Promise.resolve();
     return Promise.all([
-      sb.from("votaciones").select("id,created_at,titulo,detalle,tipo,estado,cerrada_at").order("created_at"),
+      sb.from("votaciones").select("id,created_at,titulo,detalle,categorias,estado,cerrada_at").order("created_at"),
       sb.rpc("votaciones_participacion"),
-      sb.from("votaciones_votos").select("votacion_id,votante,elegido1,elegido2")
+      sb.from("votaciones_votos").select("votacion_id,categoria,votante,elegido1,elegido2")
     ]).then(function (r) {
       r.forEach(check);
       VOT.lista = r[0].data.map(function (v) {
-        return { id: v.id, titulo: v.titulo, detalle: v.detalle || "", tipo: v.tipo, estado: v.estado, creado: v.created_at, cerrada: v.cerrada_at };
+        return { id: v.id, titulo: v.titulo, detalle: v.detalle || "", categorias: v.categorias || [], estado: v.estado, creado: v.created_at, cerrada: v.cerrada_at };
       });
       VOT.participacion = {};
-      (r[1].data || []).forEach(function (p) { (VOT.participacion[p.votacion_id] = VOT.participacion[p.votacion_id] || []).push(p.votante); });
+      (r[1].data || []).forEach(function (p) {
+        var a = VOT.participacion[p.votacion_id] = VOT.participacion[p.votacion_id] || [];
+        if (a.indexOf(p.votante) < 0) a.push(p.votante);
+      });
       VOT.votos = {};
-      r[2].data.forEach(function (x) { (VOT.votos[x.votacion_id] = VOT.votos[x.votacion_id] || []).push({ votante: x.votante, e1: x.elegido1, e2: x.elegido2 }); });
+      r[2].data.forEach(function (x) {
+        (VOT.votos[x.votacion_id] = VOT.votos[x.votacion_id] || []).push({ votante: x.votante, cat: x.categoria, e1: x.elegido1, e2: x.elegido2 });
+      });
       VOT.error = null;
     }).catch(function (e) { VOT.error = friendly(e); }).then(function () { VOT.loaded = true; });
   }
@@ -1009,13 +1034,17 @@
     var part = {}, votos = {};
     lista.forEach(function (v) {
       var vs = todos[v.id] || [];
-      part[v.id] = vs.map(function (x) { return x.votante; });
+      part[v.id] = vs.map(function (x) { return x.votante; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
       if (v.estado === "cerrada") votos[v.id] = vs; // secretos hasta cerrar, igual que en la base
     });
     return { loaded: true, error: null, lista: lista, participacion: part, votos: votos };
   }
 
-  function resultados(v, vs) {
+  function votosDe(V, v, catId) {
+    return (V.votos[v.id] || []).filter(function (x) { return String(x.cat) === String(catId); });
+  }
+
+  function resultados(vs) {
     var cuenta = {};
     vs.forEach(function (x) {
       var key = x.e2 ? [x.e1, x.e2].sort().join(" & ") : x.e1;
@@ -1027,22 +1056,30 @@
     return { filas: filas, ganadores: filas.filter(function (f) { return max > 0 && f.n === max; }), total: vs.length, max: max };
   }
 
-  function tipoLabel(t) { return t === "dupla" ? "Mejor dupla · se vota una pareja" : "Individual · se vota a una persona"; }
+  function tipoTxt(t) { return t === "dupla" ? "dupla" : "persona"; }
 
   function votacionesAbiertas(V) {
     var abiertas = V.lista.filter(function (v) { return v.estado === "abierta"; });
     if (!abiertas.length) {
-      return '<div class="empty"><p class="empty-title">No hay votaciones abiertas</p><p>' +
-        (isAdmin() ? "Creá una con “Nueva votación”." : "Cuando el admin abra una, vas a poder votar acá.") + "</p></div>";
+      var n = aVotar().length;
+      return '<div class="empty"><p class="empty-title">No hay votación abierta</p><p>' +
+        (isAdmin()
+          ? (n ? "Tocá “Abrir votación” para votar " + (n === 1 ? "la categoría" : "las " + n + " categorías") + " sin ganador."
+               : "Primero agregá categorías con “Agregar premio”, sin ganador.")
+          : "Cuando el admin la abra, vas a poder votar todas las categorías acá.") + "</p></div>";
     }
     return '<div class="votaciones">' + abiertas.map(function (v) {
+      var cats = v.categorias || [];
       var ya = V.participacion[v.id] || [];
       var faltan = NOMBRES.filter(function (n) { return ya.indexOf(n) < 0; });
       return (
         '<article class="votacion">' +
-          '<p class="label"><span class="dot-live" aria-hidden="true"></span> Abierta · ' + tipoLabel(v.tipo) + "</p>" +
+          '<p class="label"><span class="dot-live" aria-hidden="true"></span> Abierta · ' + plural(cats.length, "categoría", "categorías") + "</p>" +
           '<h3 class="premio-title">' + esc(v.titulo) + "</h3>" +
           (v.detalle ? '<p class="premio-detail">' + esc(v.detalle) + "</p>" : "") +
+          '<ol class="vot-cats">' + cats.map(function (c) {
+            return "<li><span>" + esc(c.titulo) + "</span><small>" + tipoTxt(c.tipo) + "</small></li>";
+          }).join("") + "</ol>" +
           '<div class="vot-progress"><span style="--v:' + (NOMBRES.length ? (ya.length / NOMBRES.length * 100).toFixed(1) : 0) + '%"></span></div>' +
           '<p class="premio-detail">' + ya.length + " de " + NOMBRES.length + " ya votaron" +
             (faltan.length && faltan.length <= 6 ? " · faltan: " + faltan.map(esc).join(", ") : "") + "</p>" +
@@ -1053,7 +1090,7 @@
                 '<button type="button" class="link-btn link-btn--muted" data-action="borrar-votacion" data-id="' + esc(v.id) + '">Borrar</button>'
               : "") +
           "</div>" +
-          '<p class="form-note">El voto es secreto hasta que se cierra. No podés votarte a vos mismo' + (v.tipo === "dupla" ? " ni estar en la dupla que votás" : "") + ".</p>" +
+          '<p class="form-note">Votás todas las categorías de una vez. El voto es secreto hasta que se cierra. Nadie se vota a sí mismo ni puede estar en la dupla que vota.</p>' +
         "</article>"
       );
     }).join("") + "</div>";
@@ -1068,36 +1105,49 @@
     var cerradas = V.lista.filter(function (v) { return v.estado === "cerrada"; })
       .sort(function (a, b) { return String(b.cerrada || b.creado).localeCompare(String(a.cerrada || a.creado)); });
     if (!cerradas.length) {
-      return '<div class="empty"><p class="empty-title">Todavía no hay resultados</p><p>Las estadísticas aparecen cuando se cierra una votación.</p></div>';
+      return '<div class="empty"><p class="empty-title">Todavía no hay resultados</p><p>Las estadísticas aparecen cuando se cierra la votación.</p></div>';
     }
-    var totalVotos = 0, sumPart = 0, porPersona = {};
+    var boletas = 0, sumPart = 0, nCats = 0, porPersona = {};
     var bloques = cerradas.map(function (v) {
       var vs = V.votos[v.id] || [];
-      var r = resultados(v, vs);
-      totalVotos += r.total;
-      sumPart += NOMBRES.length ? r.total / NOMBRES.length : 0;
+      var votantes = vs.map(function (x) { return x.votante; }).filter(function (n, i, a) { return a.indexOf(n) === i; }).length;
+      boletas += votantes;
+      sumPart += NOMBRES.length ? votantes / NOMBRES.length : 0;
       vs.forEach(function (x) { [x.e1, x.e2].forEach(function (n) { if (n) porPersona[n] = (porPersona[n] || 0) + 1; }); });
-      var empate = r.ganadores.length > 1;
+      var cats = (v.categorias || []).map(function (c) {
+        nCats++;
+        var r = resultados(votosDe(V, v, c.id));
+        var empate = r.ganadores.length > 1;
+        return (
+          '<article class="vot-stat">' +
+            '<p class="label">' + (c.tipo === "dupla" ? "Mejor dupla" : "A una persona") + "</p>" +
+            '<h3 class="premio-title">' + esc(c.titulo) + "</h3>" +
+            '<p class="vot-winner"><span class="label">' + (empate ? "Ganadores (empate)" : "Ganador") + "</span>" + ganadoresTxt(r) + "</p>" +
+            '<p class="premio-detail">' + plural(r.total, "voto", "votos") + "</p>" +
+            (r.filas.length
+              ? '<ol class="vot-bars">' + r.filas.map(function (f) {
+                  var gana = r.ganadores.indexOf(f) >= 0;
+                  return (
+                    '<li class="' + (gana ? "is-win" : "") + '"><span class="vot-bar-name">' + esc(f.nombre) + "</span>" +
+                    '<span class="vot-bar"><span style="--v:' + (f.n / r.max * 100).toFixed(1) + '%"></span></span>' +
+                    '<span class="vot-bar-n">' + f.n + ' <small>(' + Math.round(f.n / r.total * 100) + "%)</small></span></li>"
+                  );
+                }).join("") + "</ol>"
+              : "") +
+          "</article>"
+        );
+      });
       return (
-        '<article class="vot-stat">' +
+        '<div class="vot-edicion">' +
           '<div class="vot-stat-head">' +
-            '<div><p class="label">' + (v.tipo === "dupla" ? "Mejor dupla" : "Individual") + " · cerrada" + (v.cerrada ? " el " + fecha(String(v.cerrada).slice(0, 10)) : "") + "</p>" +
-            '<h3 class="premio-title">' + esc(v.titulo) + "</h3></div>" +
+            '<div><p class="label">Cerrada' + (v.cerrada ? " el " + fecha(String(v.cerrada).slice(0, 10)) : "") + "</p>" +
+            '<h3 class="vot-edicion-title">' + esc(v.titulo) + "</h3>" +
+            '<p class="premio-detail">' + plural(votantes, "socio votó", "socios votaron") + " · " +
+              (NOMBRES.length ? Math.round(votantes / NOMBRES.length * 100) : 0) + "% del padrón</p></div>" +
             (isAdmin() ? '<button type="button" class="link-btn link-btn--muted" data-action="borrar-votacion" data-id="' + esc(v.id) + '">Borrar</button>' : "") +
           "</div>" +
-          '<p class="vot-winner"><span class="label">' + (empate ? "Ganadores (empate)" : "Ganador") + "</span>" + ganadoresTxt(r) + "</p>" +
-          '<p class="premio-detail">' + plural(r.total, "voto", "votos") + " · votó el " + (NOMBRES.length ? Math.round(r.total / NOMBRES.length * 100) : 0) + "% del padrón</p>" +
-          (r.filas.length
-            ? '<ol class="vot-bars">' + r.filas.map(function (f) {
-                var gana = r.ganadores.indexOf(f) >= 0;
-                return (
-                  '<li class="' + (gana ? "is-win" : "") + '"><span class="vot-bar-name">' + esc(f.nombre) + "</span>" +
-                  '<span class="vot-bar"><span style="--v:' + (f.n / r.max * 100).toFixed(1) + '%"></span></span>' +
-                  '<span class="vot-bar-n">' + f.n + ' <small>(' + Math.round(f.n / r.total * 100) + "%)</small></span></li>"
-                );
-              }).join("") + "</ol>"
-            : "") +
-        "</article>"
+          '<div class="vot-stats">' + cats.join("") + "</div>" +
+        "</div>"
       );
     });
     var masVotado = Object.keys(porPersona).sort(function (a, b) { return porPersona[b] - porPersona[a] || a.localeCompare(b); });
@@ -1105,60 +1155,90 @@
     var tops = masVotado.filter(function (n) { return porPersona[n] === topN; });
     return (
       stats([
-        { label: "Votaciones cerradas", value: cerradas.length },
-        { label: "Votos emitidos", value: totalVotos },
-        { label: "Participación media", value: Math.round(sumPart / cerradas.length * 100), unit: "%" },
+        { label: "Categorías votadas", value: nCats },
+        { label: "Boletas", value: boletas },
+        { label: "Participación", value: Math.round(sumPart / cerradas.length * 100), unit: "%" },
         { label: "Más votado", value: '<span class="stat-name">' + (tops.length ? tops.map(esc).join(" · ") : "—") + "</span>", note: topN ? plural(topN, "voto", "votos") + " en total" : "" }
       ]) +
-      '<div class="vot-stats">' + bloques.join("") + "</div>"
+      bloques.join("")
     );
   }
 
   function dialogVotacion() {
+    var V = getVotaciones();
+    if (V.lista.some(function (v) { return v.estado === "abierta"; })) {
+      alert("Ya hay una votación abierta. Cerrala antes de abrir otra.");
+      return;
+    }
+    var cats = aVotar();
+    if (!cats.length) {
+      alert("No hay categorías para votar. Agregá premios sin ganador con “Agregar premio”.");
+      return;
+    }
     var body =
-      '<div class="field"><label for="v-titulo">Premio</label><input id="v-titulo" name="titulo" maxlength="60" placeholder="Ej.: Mejor dupla del año" required></div>' +
-      '<div class="field"><label for="v-detalle">Detalle <small>(opcional)</small></label><input id="v-detalle" name="detalle" maxlength="140" placeholder="Qué se vota"></div>' +
-      '<p class="label dlg-sub">¿Cómo se vota?</p>' +
-      '<div class="tipo-opts">' +
-        '<label class="check tipo-opt"><input type="radio" name="tipo" value="individual" checked><span><strong>A una persona</strong><small>Cada uno elige a un socio.</small></span></label>' +
-        '<label class="check tipo-opt"><input type="radio" name="tipo" value="dupla"><span><strong>A una dupla</strong><small>Cada uno elige una pareja. Gana una dupla.</small></span></label>' +
-      "</div>" +
-      '<p class="form-note">Se abre apenas la creás. Votan todos los socios, nadie a sí mismo. Si hay empate, ganan todos los empatados.</p>';
-    openDialog("Nueva votación", body, "Abrir votación", function (f) {
-      var t = f.titulo.value.trim(), tipo = f.querySelector('input[name="tipo"]:checked').value;
-      if (!t) return "Poné el nombre del premio.";
-      if (ONLINE) return adminRpc("admin_crear_votacion", { p_titulo: t, p_detalle: f.detalle.value.trim(), p_tipo: tipo }, loadVotaciones);
+      '<div class="field"><label for="v-titulo">Nombre</label><input id="v-titulo" name="titulo" maxlength="60" value="' + esc("Chancha Awards " + D.club.temporada) + '" required></div>' +
+      '<div class="field"><label for="v-detalle">Detalle <small>(opcional)</small></label><input id="v-detalle" name="detalle" maxlength="140" placeholder="Ej.: Se cierra el sábado en el asado"></div>' +
+      '<div class="dlg-sub-row"><p class="label">Categorías de la boleta</p><span class="form-note" id="v-count"></span></div>' +
+      '<div class="check-grid check-grid--list" id="v-cats">' + cats.map(function (c) {
+        return '<label class="check"><input type="checkbox" name="cat" value="' + esc(c.id) + '" checked><span>' + esc(c.titulo) +
+          ' <small>· ' + tipoTxt(c.tipo) + "</small></span></label>";
+      }).join("") + "</div>" +
+      '<p class="form-note">Se abre apenas la creás. Cada uno vota todas las categorías de una vez, nunca a sí mismo. Si hay empate, ganan todos los empatados.</p>';
+    var form = openDialog("Abrir votación", body, "Abrir votación", function (f) {
+      var t = f.titulo.value.trim();
+      if (!t) return "Poné un nombre.";
+      var ids = Array.prototype.filter.call(f.querySelectorAll('input[name="cat"]'), function (c) { return c.checked; }).map(function (c) { return c.value; });
+      var sel = cats.filter(function (c) { return ids.indexOf(String(c.id)) >= 0; })
+        .map(function (c) { return { id: String(c.id), titulo: c.titulo, tipo: c.tipo }; });
+      if (!sel.length) return "Elegí al menos una categoría.";
+      if (ONLINE) return adminRpc("admin_crear_votacion", { p_titulo: t, p_detalle: f.detalle.value.trim(), p_categorias: sel }, loadVotaciones);
       var lista = storeGet(KV.lista, []);
-      lista.push({ id: "v" + Date.now(), titulo: t, detalle: f.detalle.value.trim(), tipo: tipo, estado: "abierta", creado: new Date().toISOString() });
+      lista.push({ id: "v" + Date.now(), titulo: t, detalle: f.detalle.value.trim(), categorias: sel, estado: "abierta", creado: new Date().toISOString() });
       if (!storeSet(KV.lista, lista)) return "No se pudo guardar en este navegador.";
     }, ONLINE ? "Se abre para todo el grupo." : "Sin base de datos conectada: queda en este navegador.");
+    var box = document.getElementById("v-cats"), cnt = document.getElementById("v-count");
+    function contar() {
+      var n = Array.prototype.filter.call(form.querySelectorAll('input[name="cat"]'), function (c) { return c.checked; }).length;
+      cnt.textContent = n + " de " + cats.length;
+    }
+    box.addEventListener("change", contar);
+    contar();
   }
 
   function dialogVotar(id) {
     var V = getVotaciones();
     var v = V.lista.filter(function (x) { return x.id === id; })[0];
     if (!v || v.estado !== "abierta") return;
-    var dupla = v.tipo === "dupla";
+    var cats = v.categorias || [];
     var yo = storeGet("chancha.yo", "");
     if (NOMBRES.indexOf(yo) < 0) yo = "";
     var body =
       '<p class="dlg-context">' + esc(v.titulo) + "</p>" +
       '<div class="field"><label for="vt-yo">¿Quién sos?</label><select id="vt-yo" name="votante" required>' +
         options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), yo) + "</select></div>" +
-      '<div class="dlg-sub-row"><p class="label">' + (dupla ? "Elegí la dupla (2 personas)" : "Elegí a quién votás") + '</p><span class="form-note" id="vt-count"></span></div>' +
-      '<div class="check-grid" id="vt-opts"></div>' +
-      '<p class="form-note">Tu voto es secreto hasta que se cierre la votación. Si ya votaste, se reemplaza.</p>';
-    var form = openDialog("Votar", body, "Votar", function (f) {
+      '<div class="boleta" id="vt-boleta"></div>' +
+      '<p class="form-note">Si no querés votar en alguna categoría, dejala vacía. Tu boleta es secreta hasta que se cierre la votación. Si ya votaste, se reemplaza.</p>';
+    var form = openDialog("Votar", body, "Enviar boleta", function (f) {
       var votante = f.votante.value;
       if (!votante) return "Elegí tu nombre.";
-      var el = Array.prototype.filter.call(f.querySelectorAll('input[name="op"]'), function (c) { return c.checked; }).map(function (c) { return c.value; });
-      if (dupla && el.length !== 2) return "Elegí exactamente dos personas para la dupla.";
-      if (!dupla && el.length !== 1) return "Elegí a quién votás.";
-      if (el.indexOf(votante) >= 0) return "No podés votarte a vos mismo.";
+      var votos = [], err = null;
+      cats.forEach(function (c, i) {
+        if (err) return;
+        var el = Array.prototype.filter.call(f.querySelectorAll('input[name="op' + i + '"]'), function (x) { return x.checked; }).map(function (x) { return x.value; });
+        if (!el.length) return;
+        var dupla = c.tipo === "dupla";
+        if (dupla && el.length !== 2) { err = "En “" + c.titulo + "” elegí dos personas, o ninguna."; return; }
+        if (!dupla && el.length !== 1) { err = "En “" + c.titulo + "” elegí una sola persona."; return; }
+        if (el.indexOf(votante) >= 0) { err = "No podés votarte a vos mismo."; return; }
+        var par = el.slice().sort();
+        votos.push({ categoria: String(c.id), e1: par[0], e2: dupla ? par[1] : null });
+      });
+      if (err) return err;
+      if (!votos.length) return "Votá en al menos una categoría.";
       storeSet("chancha.yo", votante);
       if (ONLINE) {
         return ensureSession().then(function () {
-          return sb.rpc("votar", { p_votacion: v.id, p_votante: votante, p_elegido1: el[0], p_elegido2: dupla ? el[1] : null });
+          return sb.rpc("votar", { p_votacion: v.id, p_votante: votante, p_votos: votos });
         }).then(function (r) {
           check(r);
           if (!r.data || !r.data.ok) return (r.data && r.data.error) || "No se pudo votar.";
@@ -1167,31 +1247,53 @@
       }
       var todos = storeGet(KV.votos, {});
       var arr = (todos[v.id] || []).filter(function (x) { return x.votante !== votante; });
-      var par = el.slice().sort();
-      arr.push({ votante: votante, e1: par[0], e2: dupla ? par[1] : null });
+      votos.forEach(function (x) { arr.push({ votante: votante, cat: x.categoria, e1: x.e1, e2: x.e2 }); });
       todos[v.id] = arr;
       if (!storeSet(KV.votos, todos)) return "No se pudo guardar en este navegador.";
     }, ONLINE ? "" : "Sin base de datos conectada: el voto queda en este navegador.");
 
-    var cont = document.getElementById("vt-opts"), cnt = document.getElementById("vt-count");
+    var cont = document.getElementById("vt-boleta");
     function pintar() {
-      var me = form.votante.value;
-      var marcados = Array.prototype.filter.call(cont.querySelectorAll("input"), function (c) { return c.checked; }).map(function (c) { return c.value; });
-      cont.innerHTML = NOMBRES.filter(function (n) { return n !== me; }).map(function (n) {
-        var on = marcados.indexOf(n) >= 0;
-        return '<label class="check"><input type="' + (dupla ? "checkbox" : "radio") + '" name="op" value="' + esc(n) + '"' + (on ? " checked" : "") + "><span>" + esc(n) + "</span></label>";
+      var me = form.votante.value, prev = {};
+      Array.prototype.forEach.call(cont.querySelectorAll("input"), function (c) {
+        if (c.checked) (prev[c.name] = prev[c.name] || []).push(c.value);
+      });
+      cont.innerHTML = cats.map(function (c, i) {
+        var dupla = c.tipo === "dupla", marc = prev["op" + i] || [];
+        return (
+          '<fieldset class="boleta-cat">' +
+            '<legend><span class="boleta-n">' + pad(i + 1, 2) + "</span>" + esc(c.titulo) + "</legend>" +
+            '<p class="form-note boleta-hint" data-cnt="' + i + '">' + (dupla ? "Dupla · elegí 2" : "Elegí 1") + "</p>" +
+            '<div class="check-grid">' + NOMBRES.filter(function (n) { return n !== me; }).map(function (n) {
+              return '<label class="check"><input type="checkbox" name="op' + i + '" data-max="' + (dupla ? 2 : 1) + '" value="' + esc(n) + '"' +
+                (marc.indexOf(n) >= 0 ? " checked" : "") + "><span>" + esc(n) + "</span></label>";
+            }).join("") + "</div>" +
+          "</fieldset>"
+        );
       }).join("");
-      limitar();
+      cats.forEach(function (c, i) { limitar(i); });
     }
-    function limitar() {
-      var boxes = cont.querySelectorAll("input"), n = Array.prototype.filter.call(boxes, function (c) { return c.checked; }).length;
-      if (dupla) {
-        boxes.forEach(function (c) { c.disabled = !c.checked && n >= 2; c.parentNode.classList.toggle("is-off", c.disabled); });
-        cnt.textContent = n + " de 2";
-      } else cnt.textContent = "";
+    function limitar(i) {
+      var boxes = cont.querySelectorAll('input[name="op' + i + '"]');
+      var max = cats[i].tipo === "dupla" ? 2 : 1;
+      var n = Array.prototype.filter.call(boxes, function (c) { return c.checked; }).length;
+      if (max === 2) {
+        Array.prototype.forEach.call(boxes, function (c) { c.disabled = !c.checked && n >= 2; c.parentNode.classList.toggle("is-off", c.disabled); });
+      }
+      var hint = cont.querySelector('[data-cnt="' + i + '"]');
+      if (hint) hint.textContent = max === 2 ? "Dupla · " + n + " de 2" : (n ? "Listo" : "Elegí 1");
     }
     form.votante.addEventListener("change", pintar);
-    cont.addEventListener("change", limitar);
+    cont.addEventListener("change", function (e) {
+      var t = e.target;
+      if (!t.name || t.name.indexOf("op") !== 0) return;
+      var i = +t.name.slice(2);
+      // A una persona: marcar una desmarca la otra (y se puede desmarcar para no votar)
+      if (cats[i].tipo !== "dupla" && t.checked) {
+        Array.prototype.forEach.call(cont.querySelectorAll('input[name="' + t.name + '"]'), function (c) { if (c !== t) c.checked = false; });
+      }
+      limitar(i);
+    });
     pintar();
   }
 
@@ -1219,32 +1321,57 @@
       goleador && { title: "Goleador del año", winner: esc(goleador.nombre), detail: plural(goleador.goles, "gol", "goles") + " en " + plural(goleador.pj, "partido", "partidos") + ".", ejemplo: F.hayEjemplo },
       figura && { title: "Figura del año", winner: esc(figura.nombre), detail: "Mejor promedio de nota puesta por los demás: " + nota1(figura.prom) + ".", ejemplo: F.hayEjemplo }
     ].filter(Boolean);
+
+    // Resultado de cada categoría votada (la última votación cerrada que la incluyó)
     var V = getVotaciones();
-    V.lista.filter(function (v) { return v.estado === "cerrada"; }).forEach(function (v) {
-      var r = resultados(v, V.votos[v.id] || []);
-      cats.push({
-        title: esc(v.titulo), winner: ganadoresTxt(r), votado: true,
+    var resCat = {}, enVotacion = {};
+    V.lista.filter(function (v) { return v.estado === "cerrada"; })
+      .sort(function (a, b) { return String(a.cerrada || a.creado).localeCompare(String(b.cerrada || b.creado)); })
+      .forEach(function (v) {
+        (v.categorias || []).forEach(function (c) { resCat[c.id] = { c: c, r: resultados(votosDe(V, v, c.id)) }; });
+      });
+    V.lista.filter(function (v) { return v.estado === "abierta"; }).forEach(function (v) {
+      (v.categorias || []).forEach(function (c) { enVotacion[c.id] = true; });
+    });
+    function votadaCard(c, res, extra) {
+      var r = res.r;
+      return Object.assign({
+        title: esc(c.titulo), winner: ganadoresTxt(r), votado: true, tipo: c.tipo,
         detail: (r.ganadores.length > 1 ? "Empate: ganan " + r.ganadores.length + ". " : "") + "Votado por el grupo · " + plural(r.total, "voto", "votos") + ".",
         href2: "#estadisticas"
-      });
-    });
-    (D.premios || []).forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || "") }); });
-    if (ONLINE) {
-      REMOTE.premios.forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: p.mio ? 0 : null, pid: p.id }); });
-    } else {
-      storeGet(K.premios, []).forEach(function (p, i) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: i }); });
+      }, extra || {});
     }
+    var usadas = {};
+    getPremios().forEach(function (p) {
+      var res = resCat[p.id];
+      var extra = { local: p.local, pid: p.pid };
+      usadas[p.id] = true;
+      if (p.ganador) {
+        cats.push(Object.assign({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle), tipo: p.tipo }, extra));
+      } else if (res) {
+        cats.push(votadaCard(p, res, extra));
+      } else {
+        cats.push(Object.assign({
+          title: esc(p.titulo), tipo: p.tipo,
+          winner: '<span class="premio-pend">' + (enVotacion[p.id] ? "En votación" : "A votar") + "</span>",
+          detail: esc(p.detalle) || (p.tipo === "dupla" ? "Se vota una dupla." : "Se vota a una persona."),
+          href2: enVotacion[p.id] ? "#votaciones" : null, href2Txt: "Votar →"
+        }, extra));
+      }
+    });
+    // Categorías votadas que después se quitaron de la lista: el resultado queda
+    Object.keys(resCat).forEach(function (k) { if (!usadas[k]) cats.push(votadaCard(resCat[k].c, resCat[k])); });
 
     var cards = '<div class="premios">' + cats.map(function (c) {
       var isLocal = c.local != null;
       return (
         '<article class="premio' + (c.nueva ? " is-nueva" : "") + '">' +
-          '<p class="label">' + (c.nueva ? "Nueva categoría" : c.votado ? "Votación" : "Categoría") + (c.ejemplo ? " " + EJ : "") + (isLocal ? " " + LOCAL : "") + "</p>" +
+          '<p class="label">' + (c.nueva ? "Nueva categoría" : c.votado ? "Votado" : "Categoría") + (c.tipo === "dupla" ? " · dupla" : "") + (c.ejemplo ? " " + EJ : "") + (isLocal ? " " + LOCAL : "") + "</p>" +
           '<h3 class="premio-title">' + c.title + "</h3>" +
           '<p class="premio-winner">' + c.winner + "</p>" +
           (c.detail ? '<p class="premio-detail">' + c.detail + "</p>" : "") +
           (c.href ? '<a class="more ulink" href="' + c.href + '">Ver y votar →</a>' : "") +
-          (c.href2 ? '<a class="more ulink" href="' + c.href2 + '">Ver estadísticas →</a>' : "") +
+          (c.href2 ? '<a class="more ulink" href="' + c.href2 + '">' + (c.href2Txt || "Ver estadísticas →") + "</a>" : "") +
           (isLocal ? '<button type="button" class="link-btn link-btn--muted premio-quitar" data-action="quitar-premio" data-i="' + c.local + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Quitar</button>" : "") +
         "</article>"
       );
@@ -1283,7 +1410,7 @@
         (ONLINE && V.error ? '<p class="notice"><strong>No se pudieron cargar las votaciones.</strong> ' + esc(V.error) + "</p>" : "") +
         (ONLINE && !V.loaded ? '<p class="notice">Cargando votaciones…</p>' : votacionesAbiertas(V)),
         isAdmin()
-          ? addBtn("votacion", "Nueva votación") + ' <button type="button" class="link-btn link-btn--muted" data-action="salir">Salir de admin</button>'
+          ? addBtn("votacion", "Abrir votación") + ' <button type="button" class="link-btn link-btn--muted" data-action="salir">Salir de admin</button>'
           : '<button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Admin</button>",
         "votaciones") +
       section(3, "Estadísticas de las votaciones", V.loaded ? estadisticasVotaciones(V) : "", asideLabel("Se ven al cerrar cada votación"), "estadisticas") +
@@ -1547,20 +1674,25 @@
   function dialogPremio() {
     var body =
       '<div class="field"><label for="pr-titulo">Categoría</label><input id="pr-titulo" name="titulo" maxlength="50" placeholder="Ej.: Mejor asado" required></div>' +
-      '<div class="field"><label for="pr-ganador">Ganador</label><input id="pr-ganador" name="ganador" maxlength="40" list="dl-socios-dlg" required></div>' +
-      '<div class="field"><label for="pr-detalle">Detalle <small>(opcional)</small></label><input id="pr-detalle" name="detalle" maxlength="120" placeholder="Por qué se lo ganó"></div>' +
-      '<datalist id="dl-socios-dlg">' + options(NOMBRES) + "</datalist>";
+      '<div class="field"><label for="pr-detalle">Detalle <small>(opcional)</small></label><input id="pr-detalle" name="detalle" maxlength="120" placeholder="De qué se trata"></div>' +
+      '<p class="label dlg-sub">¿Cómo se vota?</p>' +
+      '<div class="tipo-opts">' +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="individual" checked><span><strong>A una persona</strong><small>Cada uno elige a un socio.</small></span></label>' +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="dupla"><span><strong>A una dupla</strong><small>Cada uno elige una pareja. Gana una dupla.</small></span></label>' +
+      "</div>" +
+      '<div class="field"><label for="pr-ganador">Ganador <small>(dejalo vacío si se vota)</small></label><input id="pr-ganador" name="ganador" maxlength="40" list="dl-socios-dlg" placeholder="Solo si ya está decidido"></div>' +
+      '<datalist id="dl-socios-dlg">' + options(NOMBRES) + "</datalist>" +
+      '<p class="form-note">Las categorías sin ganador entran en la próxima votación de los Awards.</p>';
     openDialog("Agregar premio", body, "Guardar premio", function (f) {
-      var t = f.titulo.value.trim(), g = f.ganador.value.trim();
+      var t = f.titulo.value.trim(), g = f.ganador.value.trim(), tipo = f.querySelector('input[name="tipo"]:checked').value;
       if (!t) return "Poné el nombre de la categoría.";
-      if (!g) return "Poné quién lo ganó.";
       if (ONLINE) {
         return remoteWrite(function () {
-          return sb.from("premios").insert({ titulo: t, ganador: g, detalle: f.detalle.value.trim() || null });
+          return sb.from("premios").insert({ titulo: t, tipo: tipo, ganador: g || null, detalle: f.detalle.value.trim() || null });
         });
       }
       var list = storeGet(K.premios, []);
-      list.push({ titulo: t, ganador: g, detalle: f.detalle.value.trim() });
+      list.push({ id: "p" + Date.now(), titulo: t, tipo: tipo, ganador: g, detalle: f.detalle.value.trim() });
       if (!storeSet(K.premios, list)) return "No se pudo guardar en este navegador.";
     });
   }

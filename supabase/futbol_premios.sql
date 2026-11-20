@@ -69,15 +69,20 @@ create table if not exists public.dorsales (
 );
 create index if not exists dorsales_user_idx on public.dorsales (user_id);
 
--- ---------- 4) Premios extra de los Chancha Awards ----------
+-- ---------- 4) Categorías de premios de los Chancha Awards ----------
+-- Sin ganador = se vota en la votación de los Awards (tipo: a una persona o a una dupla).
 create table if not exists public.premios (
   id         uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
   created_by uuid not null default auth.uid() references auth.users (id) on delete cascade,
   titulo     text not null check (char_length(titulo) between 1 and 50),
-  ganador    text not null check (char_length(ganador) between 1 and 40),
+  tipo       text not null default 'individual' check (tipo in ('individual', 'dupla')),
+  ganador    text check (ganador is null or char_length(ganador) between 1 and 40),
   detalle    text check (detalle is null or char_length(detalle) <= 120)
 );
+-- Si la tabla ya existía de antes, la actualiza
+alter table public.premios add column if not exists tipo text not null default 'individual' check (tipo in ('individual', 'dupla'));
+alter table public.premios alter column ganador drop not null;
 create index if not exists premios_created_by_idx on public.premios (created_by);
 
 -- updated_at automático
