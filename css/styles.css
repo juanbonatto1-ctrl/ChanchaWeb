@@ -418,6 +418,8 @@ img { display: block; max-width: 100%; height: auto; }
   transition: border-color var(--dur-fast);
 }
 .field input:focus { outline: none; border-color: var(--color-rosa-ink); }
+.field input, .field select { width: 100%; min-width: 0; }
+.field { min-width: 0; }
 .form-actions { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .btn {
   font: inherit; font-size: var(--fs-sm); font-weight: 600; letter-spacing: 0.06em; cursor: pointer;
@@ -575,6 +577,44 @@ img { display: block; max-width: 100%; height: auto; }
 .clip.is-top .clip-rank { color: var(--color-rosa-ink); }
 .clips-loading { grid-column: 1 / -1; padding: var(--space-5) 0; }
 @media (max-width: 400px) { .clips--vote { grid-template-columns: 1fr; } .clips--vote .clip { grid-template-columns: 2.75rem 1fr; } }
+
+/* ================= Votaciones ================= */
+.votaciones { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
+.votacion { border: var(--line) solid var(--color-rosa); border-radius: var(--radius-card); background: var(--color-rosa-claro); padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); }
+.votacion .premio-title { margin-top: 0; }
+.dot-live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--color-rosa-ink); margin-right: 2px; vertical-align: 1px; animation: live 1.6s ease-in-out infinite; }
+@keyframes live { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .dot-live { animation: none; } }
+.vot-progress { height: 4px; background: var(--color-bg); border-radius: 2px; overflow: hidden; margin-top: var(--space-2); }
+.vot-progress span { display: block; height: 100%; width: var(--v); background: var(--color-rosa-ink); }
+.vot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.votacion .btn--ghost { background: var(--color-bg); }
+.section-aside .btn-add + .link-btn { margin-left: var(--space-3); }
+
+.vot-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-5); margin-top: var(--space-6); }
+.vot-stat { border-top: 2px solid var(--color-ink); padding-top: var(--space-3); }
+.vot-stat-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.vot-winner { font-family: var(--font-data); font-size: 1.75rem; font-weight: 600; line-height: 1.15; color: var(--color-rosa-ink); margin-top: var(--space-3); }
+.vot-winner .label { display: block; font-family: var(--font-body); margin-bottom: var(--space-1); }
+.vot-bars { margin-top: var(--space-4); border-top: var(--line) solid var(--color-line); }
+.vot-bars li { display: grid; grid-template-columns: minmax(0, 9rem) 1fr 4.5rem; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: var(--line) solid var(--color-line); }
+.vot-bar-name { font-family: var(--font-display); overflow-wrap: anywhere; }
+.vot-bar { height: 8px; background: var(--color-line); border-radius: 2px; overflow: hidden; }
+.vot-bar span { display: block; height: 100%; width: var(--v); background: var(--color-ink-soft); }
+.vot-bars li.is-win .vot-bar span { background: var(--color-rosa); }
+.vot-bars li.is-win .vot-bar-name { font-weight: 600; }
+.vot-bar-n { font-family: var(--font-data); font-size: 1.125rem; font-weight: 600; text-align: right; }
+.vot-bar-n small { font-size: 0.75em; color: var(--color-ink-soft); font-weight: 500; }
+.stat-name { font-family: var(--font-display); font-size: 0.42em; line-height: 1.2; display: inline-block; }
+@media (max-width: 420px) { .vot-bars li { grid-template-columns: minmax(0, 6.5rem) 1fr 3.75rem; } .vot-stats { grid-template-columns: 1fr; } }
+
+.tipo-opts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.tipo-opt { align-items: flex-start; }
+.tipo-opt span { display: flex; flex-direction: column; }
+.tipo-opt strong { font-weight: 600; }
+.tipo-opt small { font-family: var(--font-body); font-size: var(--fs-xs); color: var(--color-ink-soft); margin-top: 2px; }
+@media (max-width: 420px) { .tipo-opts { grid-template-columns: 1fr; } }
+.check.is-off { opacity: 0.45; cursor: not-allowed; }
 
 /* ================= Admin de asistencia ================= */
 .lock { width: 0.85em; height: 0.85em; display: inline-block; vertical-align: -0.05em; fill: none; stroke: currentColor; stroke-width: 1.5; }

@@ -94,7 +94,7 @@
   }
 
   // Llama a una función admin_* de Supabase con el PIN; devuelve un mensaje de error o nada.
-  function adminRpc(fn, args) {
+  function adminRpc(fn, args, recargar) {
     args.p_pin = adminPin();
     return sb.rpc(fn, args).then(function (r) {
       check(r);
@@ -103,7 +103,7 @@
         if (/PIN|intentos/.test(msg)) setAdmin(false);
         return msg;
       }
-      return loadAsistRemote().then(function () { return null; });
+      return (recargar || loadAsistRemote)().then(function () { return null; });
     }).catch(function (e) { return friendly(e); });
   }
 
@@ -977,6 +977,238 @@
     });
   }
 
+  /* ================= VOTACIONES (Chancha Awards) =================
+     El admin (PIN) crea y cierra votaciones. Cada socio vota una vez y no a sí mismo.
+     "individual" = se vota a una persona · "dupla" = se vota a una pareja.
+     Votos secretos hasta que se cierra. Empate = ganan todos los empatados. */
+  var KV = { lista: "chancha.votaciones", votos: "chancha.votacionesVotos" };
+  var VOT = { loaded: !ONLINE, error: null, lista: [], participacion: {}, votos: {} };
+
+  function loadVotaciones() {
+    if (!ONLINE) return Promise.resolve();
+    return Promise.all([
+      sb.from("votaciones").select("id,created_at,titulo,detalle,tipo,estado,cerrada_at").order("created_at"),
+      sb.rpc("votaciones_participacion"),
+      sb.from("votaciones_votos").select("votacion_id,votante,elegido1,elegido2")
+    ]).then(function (r) {
+      r.forEach(check);
+      VOT.lista = r[0].data.map(function (v) {
+        return { id: v.id, titulo: v.titulo, detalle: v.detalle || "", tipo: v.tipo, estado: v.estado, creado: v.created_at, cerrada: v.cerrada_at };
+      });
+      VOT.participacion = {};
+      (r[1].data || []).forEach(function (p) { (VOT.participacion[p.votacion_id] = VOT.participacion[p.votacion_id] || []).push(p.votante); });
+      VOT.votos = {};
+      r[2].data.forEach(function (x) { (VOT.votos[x.votacion_id] = VOT.votos[x.votacion_id] || []).push({ votante: x.votante, e1: x.elegido1, e2: x.elegido2 }); });
+      VOT.error = null;
+    }).catch(function (e) { VOT.error = friendly(e); }).then(function () { VOT.loaded = true; });
+  }
+
+  function getVotaciones() {
+    if (ONLINE) return VOT;
+    var lista = storeGet(KV.lista, []), todos = storeGet(KV.votos, {});
+    var part = {}, votos = {};
+    lista.forEach(function (v) {
+      var vs = todos[v.id] || [];
+      part[v.id] = vs.map(function (x) { return x.votante; });
+      if (v.estado === "cerrada") votos[v.id] = vs; // secretos hasta cerrar, igual que en la base
+    });
+    return { loaded: true, error: null, lista: lista, participacion: part, votos: votos };
+  }
+
+  function resultados(v, vs) {
+    var cuenta = {};
+    vs.forEach(function (x) {
+      var key = x.e2 ? [x.e1, x.e2].sort().join(" & ") : x.e1;
+      cuenta[key] = (cuenta[key] || 0) + 1;
+    });
+    var filas = Object.keys(cuenta).map(function (k) { return { nombre: k, n: cuenta[k] }; })
+      .sort(function (a, b) { return b.n - a.n || a.nombre.localeCompare(b.nombre); });
+    var max = filas.length ? filas[0].n : 0;
+    return { filas: filas, ganadores: filas.filter(function (f) { return max > 0 && f.n === max; }), total: vs.length, max: max };
+  }
+
+  function tipoLabel(t) { return t === "dupla" ? "Mejor dupla · se vota una pareja" : "Individual · se vota a una persona"; }
+
+  function votacionesAbiertas(V) {
+    var abiertas = V.lista.filter(function (v) { return v.estado === "abierta"; });
+    if (!abiertas.length) {
+      return '<div class="empty"><p class="empty-title">No hay votaciones abiertas</p><p>' +
+        (isAdmin() ? "Creá una con “Nueva votación”." : "Cuando el admin abra una, vas a poder votar acá.") + "</p></div>";
+    }
+    return '<div class="votaciones">' + abiertas.map(function (v) {
+      var ya = V.participacion[v.id] || [];
+      var faltan = NOMBRES.filter(function (n) { return ya.indexOf(n) < 0; });
+      return (
+        '<article class="votacion">' +
+          '<p class="label"><span class="dot-live" aria-hidden="true"></span> Abierta · ' + tipoLabel(v.tipo) + "</p>" +
+          '<h3 class="premio-title">' + esc(v.titulo) + "</h3>" +
+          (v.detalle ? '<p class="premio-detail">' + esc(v.detalle) + "</p>" : "") +
+          '<div class="vot-progress"><span style="--v:' + (NOMBRES.length ? (ya.length / NOMBRES.length * 100).toFixed(1) : 0) + '%"></span></div>' +
+          '<p class="premio-detail">' + ya.length + " de " + NOMBRES.length + " ya votaron" +
+            (faltan.length && faltan.length <= 6 ? " · faltan: " + faltan.map(esc).join(", ") : "") + "</p>" +
+          '<div class="vot-actions">' +
+            '<button type="button" class="btn" data-action="votar-premio" data-id="' + esc(v.id) + '">Votar</button>' +
+            (isAdmin()
+              ? '<button type="button" class="btn btn--ghost" data-action="cerrar-votacion" data-id="' + esc(v.id) + '">Cerrar y ver resultados</button>' +
+                '<button type="button" class="link-btn link-btn--muted" data-action="borrar-votacion" data-id="' + esc(v.id) + '">Borrar</button>'
+              : "") +
+          "</div>" +
+          '<p class="form-note">El voto es secreto hasta que se cierra. No podés votarte a vos mismo' + (v.tipo === "dupla" ? " ni estar en la dupla que votás" : "") + ".</p>" +
+        "</article>"
+      );
+    }).join("") + "</div>";
+  }
+
+  function ganadoresTxt(r) {
+    if (!r.ganadores.length) return "Sin votos";
+    return r.ganadores.map(function (g) { return esc(g.nombre); }).join(" · ");
+  }
+
+  function estadisticasVotaciones(V) {
+    var cerradas = V.lista.filter(function (v) { return v.estado === "cerrada"; })
+      .sort(function (a, b) { return String(b.cerrada || b.creado).localeCompare(String(a.cerrada || a.creado)); });
+    if (!cerradas.length) {
+      return '<div class="empty"><p class="empty-title">Todavía no hay resultados</p><p>Las estadísticas aparecen cuando se cierra una votación.</p></div>';
+    }
+    var totalVotos = 0, sumPart = 0, porPersona = {};
+    var bloques = cerradas.map(function (v) {
+      var vs = V.votos[v.id] || [];
+      var r = resultados(v, vs);
+      totalVotos += r.total;
+      sumPart += NOMBRES.length ? r.total / NOMBRES.length : 0;
+      vs.forEach(function (x) { [x.e1, x.e2].forEach(function (n) { if (n) porPersona[n] = (porPersona[n] || 0) + 1; }); });
+      var empate = r.ganadores.length > 1;
+      return (
+        '<article class="vot-stat">' +
+          '<div class="vot-stat-head">' +
+            '<div><p class="label">' + (v.tipo === "dupla" ? "Mejor dupla" : "Individual") + " · cerrada" + (v.cerrada ? " el " + fecha(String(v.cerrada).slice(0, 10)) : "") + "</p>" +
+            '<h3 class="premio-title">' + esc(v.titulo) + "</h3></div>" +
+            (isAdmin() ? '<button type="button" class="link-btn link-btn--muted" data-action="borrar-votacion" data-id="' + esc(v.id) + '">Borrar</button>' : "") +
+          "</div>" +
+          '<p class="vot-winner"><span class="label">' + (empate ? "Ganadores (empate)" : "Ganador") + "</span>" + ganadoresTxt(r) + "</p>" +
+          '<p class="premio-detail">' + plural(r.total, "voto", "votos") + " · votó el " + (NOMBRES.length ? Math.round(r.total / NOMBRES.length * 100) : 0) + "% del padrón</p>" +
+          (r.filas.length
+            ? '<ol class="vot-bars">' + r.filas.map(function (f) {
+                var gana = r.ganadores.indexOf(f) >= 0;
+                return (
+                  '<li class="' + (gana ? "is-win" : "") + '"><span class="vot-bar-name">' + esc(f.nombre) + "</span>" +
+                  '<span class="vot-bar"><span style="--v:' + (f.n / r.max * 100).toFixed(1) + '%"></span></span>' +
+                  '<span class="vot-bar-n">' + f.n + ' <small>(' + Math.round(f.n / r.total * 100) + "%)</small></span></li>"
+                );
+              }).join("") + "</ol>"
+            : "") +
+        "</article>"
+      );
+    });
+    var masVotado = Object.keys(porPersona).sort(function (a, b) { return porPersona[b] - porPersona[a] || a.localeCompare(b); });
+    var topN = masVotado.length ? porPersona[masVotado[0]] : 0;
+    var tops = masVotado.filter(function (n) { return porPersona[n] === topN; });
+    return (
+      stats([
+        { label: "Votaciones cerradas", value: cerradas.length },
+        { label: "Votos emitidos", value: totalVotos },
+        { label: "Participación media", value: Math.round(sumPart / cerradas.length * 100), unit: "%" },
+        { label: "Más votado", value: '<span class="stat-name">' + (tops.length ? tops.map(esc).join(" · ") : "—") + "</span>", note: topN ? plural(topN, "voto", "votos") + " en total" : "" }
+      ]) +
+      '<div class="vot-stats">' + bloques.join("") + "</div>"
+    );
+  }
+
+  function dialogVotacion() {
+    var body =
+      '<div class="field"><label for="v-titulo">Premio</label><input id="v-titulo" name="titulo" maxlength="60" placeholder="Ej.: Mejor dupla del año" required></div>' +
+      '<div class="field"><label for="v-detalle">Detalle <small>(opcional)</small></label><input id="v-detalle" name="detalle" maxlength="140" placeholder="Qué se vota"></div>' +
+      '<p class="label dlg-sub">¿Cómo se vota?</p>' +
+      '<div class="tipo-opts">' +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="individual" checked><span><strong>A una persona</strong><small>Cada uno elige a un socio.</small></span></label>' +
+        '<label class="check tipo-opt"><input type="radio" name="tipo" value="dupla"><span><strong>A una dupla</strong><small>Cada uno elige una pareja. Gana una dupla.</small></span></label>' +
+      "</div>" +
+      '<p class="form-note">Se abre apenas la creás. Votan todos los socios, nadie a sí mismo. Si hay empate, ganan todos los empatados.</p>';
+    openDialog("Nueva votación", body, "Abrir votación", function (f) {
+      var t = f.titulo.value.trim(), tipo = f.querySelector('input[name="tipo"]:checked').value;
+      if (!t) return "Poné el nombre del premio.";
+      if (ONLINE) return adminRpc("admin_crear_votacion", { p_titulo: t, p_detalle: f.detalle.value.trim(), p_tipo: tipo }, loadVotaciones);
+      var lista = storeGet(KV.lista, []);
+      lista.push({ id: "v" + Date.now(), titulo: t, detalle: f.detalle.value.trim(), tipo: tipo, estado: "abierta", creado: new Date().toISOString() });
+      if (!storeSet(KV.lista, lista)) return "No se pudo guardar en este navegador.";
+    }, ONLINE ? "Se abre para todo el grupo." : "Sin base de datos conectada: queda en este navegador.");
+  }
+
+  function dialogVotar(id) {
+    var V = getVotaciones();
+    var v = V.lista.filter(function (x) { return x.id === id; })[0];
+    if (!v || v.estado !== "abierta") return;
+    var dupla = v.tipo === "dupla";
+    var yo = storeGet("chancha.yo", "");
+    if (NOMBRES.indexOf(yo) < 0) yo = "";
+    var body =
+      '<p class="dlg-context">' + esc(v.titulo) + "</p>" +
+      '<div class="field"><label for="vt-yo">¿Quién sos?</label><select id="vt-yo" name="votante" required>' +
+        options([{ v: "", l: "Elegí tu nombre" }].concat(NOMBRES), yo) + "</select></div>" +
+      '<div class="dlg-sub-row"><p class="label">' + (dupla ? "Elegí la dupla (2 personas)" : "Elegí a quién votás") + '</p><span class="form-note" id="vt-count"></span></div>' +
+      '<div class="check-grid" id="vt-opts"></div>' +
+      '<p class="form-note">Tu voto es secreto hasta que se cierre la votación. Si ya votaste, se reemplaza.</p>';
+    var form = openDialog("Votar", body, "Votar", function (f) {
+      var votante = f.votante.value;
+      if (!votante) return "Elegí tu nombre.";
+      var el = Array.prototype.filter.call(f.querySelectorAll('input[name="op"]'), function (c) { return c.checked; }).map(function (c) { return c.value; });
+      if (dupla && el.length !== 2) return "Elegí exactamente dos personas para la dupla.";
+      if (!dupla && el.length !== 1) return "Elegí a quién votás.";
+      if (el.indexOf(votante) >= 0) return "No podés votarte a vos mismo.";
+      storeSet("chancha.yo", votante);
+      if (ONLINE) {
+        return ensureSession().then(function () {
+          return sb.rpc("votar", { p_votacion: v.id, p_votante: votante, p_elegido1: el[0], p_elegido2: dupla ? el[1] : null });
+        }).then(function (r) {
+          check(r);
+          if (!r.data || !r.data.ok) return (r.data && r.data.error) || "No se pudo votar.";
+          return loadVotaciones().then(function () { return null; });
+        }).catch(function (e) { return friendly(e); });
+      }
+      var todos = storeGet(KV.votos, {});
+      var arr = (todos[v.id] || []).filter(function (x) { return x.votante !== votante; });
+      var par = el.slice().sort();
+      arr.push({ votante: votante, e1: par[0], e2: dupla ? par[1] : null });
+      todos[v.id] = arr;
+      if (!storeSet(KV.votos, todos)) return "No se pudo guardar en este navegador.";
+    }, ONLINE ? "" : "Sin base de datos conectada: el voto queda en este navegador.");
+
+    var cont = document.getElementById("vt-opts"), cnt = document.getElementById("vt-count");
+    function pintar() {
+      var me = form.votante.value;
+      var marcados = Array.prototype.filter.call(cont.querySelectorAll("input"), function (c) { return c.checked; }).map(function (c) { return c.value; });
+      cont.innerHTML = NOMBRES.filter(function (n) { return n !== me; }).map(function (n) {
+        var on = marcados.indexOf(n) >= 0;
+        return '<label class="check"><input type="' + (dupla ? "checkbox" : "radio") + '" name="op" value="' + esc(n) + '"' + (on ? " checked" : "") + "><span>" + esc(n) + "</span></label>";
+      }).join("");
+      limitar();
+    }
+    function limitar() {
+      var boxes = cont.querySelectorAll("input"), n = Array.prototype.filter.call(boxes, function (c) { return c.checked; }).length;
+      if (dupla) {
+        boxes.forEach(function (c) { c.disabled = !c.checked && n >= 2; c.parentNode.classList.toggle("is-off", c.disabled); });
+        cnt.textContent = n + " de 2";
+      } else cnt.textContent = "";
+    }
+    form.votante.addEventListener("change", pintar);
+    cont.addEventListener("change", limitar);
+    pintar();
+  }
+
+  function cambiarVotacion(id, accion) {
+    if (ONLINE) {
+      return adminRpc(accion === "cerrar" ? "admin_cerrar_votacion" : "admin_borrar_votacion", { p_id: id }, loadVotaciones);
+    }
+    var lista = storeGet(KV.lista, []);
+    if (accion === "cerrar") lista.forEach(function (v) { if (v.id === id) { v.estado = "cerrada"; v.cerrada = new Date().toISOString(); } });
+    else {
+      lista = lista.filter(function (v) { return v.id !== id; });
+      var todos = storeGet(KV.votos, {}); delete todos[id]; storeSet(KV.votos, todos);
+    }
+    storeSet(KV.lista, lista);
+    return Promise.resolve(null);
+  }
+
   function pageAwards() {
     var top = ranking[0];
     var goleador = F.ST.goleadores[0];
@@ -987,6 +1219,15 @@
       goleador && { title: "Goleador del año", winner: esc(goleador.nombre), detail: plural(goleador.goles, "gol", "goles") + " en " + plural(goleador.pj, "partido", "partidos") + ".", ejemplo: F.hayEjemplo },
       figura && { title: "Figura del año", winner: esc(figura.nombre), detail: "Mejor promedio de nota puesta por los demás: " + nota1(figura.prom) + ".", ejemplo: F.hayEjemplo }
     ].filter(Boolean);
+    var V = getVotaciones();
+    V.lista.filter(function (v) { return v.estado === "cerrada"; }).forEach(function (v) {
+      var r = resultados(v, V.votos[v.id] || []);
+      cats.push({
+        title: esc(v.titulo), winner: ganadoresTxt(r), votado: true,
+        detail: (r.ganadores.length > 1 ? "Empate: ganan " + r.ganadores.length + ". " : "") + "Votado por el grupo · " + plural(r.total, "voto", "votos") + ".",
+        href2: "#estadisticas"
+      });
+    });
     (D.premios || []).forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || "") }); });
     if (ONLINE) {
       REMOTE.premios.forEach(function (p) { cats.push({ title: esc(p.titulo), winner: esc(p.ganador), detail: esc(p.detalle || ""), local: p.mio ? 0 : null, pid: p.id }); });
@@ -998,11 +1239,12 @@
       var isLocal = c.local != null;
       return (
         '<article class="premio' + (c.nueva ? " is-nueva" : "") + '">' +
-          '<p class="label">' + (c.nueva ? "Nueva categoría" : "Categoría") + (c.ejemplo ? " " + EJ : "") + (isLocal ? " " + LOCAL : "") + "</p>" +
+          '<p class="label">' + (c.nueva ? "Nueva categoría" : c.votado ? "Votación" : "Categoría") + (c.ejemplo ? " " + EJ : "") + (isLocal ? " " + LOCAL : "") + "</p>" +
           '<h3 class="premio-title">' + c.title + "</h3>" +
           '<p class="premio-winner">' + c.winner + "</p>" +
           (c.detail ? '<p class="premio-detail">' + c.detail + "</p>" : "") +
           (c.href ? '<a class="more ulink" href="' + c.href + '">Ver y votar →</a>' : "") +
+          (c.href2 ? '<a class="more ulink" href="' + c.href2 + '">Ver estadísticas →</a>' : "") +
           (isLocal ? '<button type="button" class="link-btn link-btn--muted premio-quitar" data-action="quitar-premio" data-i="' + c.local + '"' + (c.pid ? ' data-id="' + esc(c.pid) + '"' : "") + ">Quitar</button>" : "") +
         "</article>"
       );
@@ -1037,8 +1279,16 @@
       pageHero("Edición " + D.club.temporada, "Chancha <em>Awards</em>", "Los premios de la temporada. Este año se estrena la categoría Clip del año.") +
       remoteNotice() +
       section(1, "Categorías " + D.club.temporada, cards, addBtn("premio", "Agregar premio"), "categorias") +
-      section(2, "Clip del año", form + '<div id="clips-grid" class="clips clips--vote"></div>', '<span class="label" id="clips-count"></span>', "clip") +
-      section(3, "Ediciones anteriores", historial, asideLabel("Historial")) +
+      section(2, "Votaciones",
+        (ONLINE && V.error ? '<p class="notice"><strong>No se pudieron cargar las votaciones.</strong> ' + esc(V.error) + "</p>" : "") +
+        (ONLINE && !V.loaded ? '<p class="notice">Cargando votaciones…</p>' : votacionesAbiertas(V)),
+        isAdmin()
+          ? addBtn("votacion", "Nueva votación") + ' <button type="button" class="link-btn link-btn--muted" data-action="salir">Salir de admin</button>'
+          : '<button type="button" class="link-btn link-btn--muted" data-action="admin">' + LOCK + " Admin</button>",
+        "votaciones") +
+      section(3, "Estadísticas de las votaciones", V.loaded ? estadisticasVotaciones(V) : "", asideLabel("Se ven al cerrar cada votación"), "estadisticas") +
+      section(4, "Clip del año", form + '<div id="clips-grid" class="clips clips--vote"></div>', '<span class="label" id="clips-count"></span>', "clip") +
+      section(5, "Ediciones anteriores", historial, asideLabel("Historial")) +
       '<datalist id="dl-socios">' + options(NOMBRES) + "</datalist>"
     );
   }
@@ -1422,6 +1672,17 @@
     else if (a === "premio") dialogPremio();
     else if (a === "admin") dialogAdmin();
     else if (a === "salir") { setAdmin(false); render(); }
+    else if (a === "votacion" && isAdmin()) dialogVotacion();
+    else if (a === "votar-premio") dialogVotar(id);
+    else if ((a === "cerrar-votacion" || a === "borrar-votacion") && isAdmin()) {
+      var cerrar = a === "cerrar-votacion";
+      if (!confirm(cerrar ? "¿Cerrar la votación? Ya no se va a poder votar y se muestran los resultados." : "¿Borrar esta votación y todos sus votos?")) return;
+      cambiarVotacion(id, cerrar ? "cerrar" : "borrar").then(function (err) {
+        if (err) alert(err);
+        render();
+        if (cerrar && !err) { var s = document.getElementById("estadisticas"); if (s) s.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      });
+    }
     else if (a === "juntada" && isAdmin()) dialogJuntada();
     else if (a === "socio" && isAdmin()) dialogSocio();
     else if (a === "descargar" && isAdmin()) descargarAsistencia();
@@ -1509,7 +1770,11 @@
   render(true);
   document.getElementById("footer").outerHTML = footer();
   if (ONLINE) {
-    Promise.all([loadAsistRemote(), page === "futbol" || page === "awards" ? loadRemote() : null]).then(function () {
+    Promise.all([
+      loadAsistRemote(),
+      page === "futbol" || page === "awards" ? loadRemote() : null,
+      page === "awards" ? loadVotaciones() : null
+    ]).then(function () {
       render();
       document.getElementById("footer").outerHTML = footer();
     });

@@ -23,9 +23,11 @@ Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en
 
 1. **Proyecto:** en supabase.com abrí el proyecto que quieras usar para La Chancha (o creá uno nuevo).
 2. **Tablas y permisos:** en SQL Editor → New query, corré estos archivos, cada uno entero → **Run**:
-   - `supabase/asistencia_admin.sql`: asistencia a juntadas y admin con tu PIN (6767).
-   - `supabase/clips.sql`: clips y votos del Clip del año.
-   - `supabase/futbol_premios.sql`: partidos, notas, dorsales y premios.
+   1. `supabase/asistencia_admin.sql`: asistencia a juntadas y admin con tu PIN (6767). **Va primero.**
+   2. `supabase/votaciones.sql`: votaciones de los Chancha Awards (usa los socios y el PIN del anterior).
+   3. `supabase/clips.sql`: clips y votos del Clip del año.
+   4. `supabase/futbol_premios.sql`: partidos, notas, dorsales y premios.
+   5. `supabase/permisos.sql`: deja que la web lea y guarde. **Va último.**
 3. **Login sin cuenta:** Authentication → Sign In / Providers → activá **Allow anonymous sign-ins**.
    Cada celular queda identificado solo, sin mail ni contraseña.
 4. **Claves:** Project Settings → API (o "API Keys"). Copiá:
@@ -48,6 +50,13 @@ Sin este paso funcionan en **modo de prueba** (cada uno ve solo lo que cargó en
 - **Partidos y premios:** cualquiera los carga. Solo los puede quitar quien los cargó, desde su celular.
 - **Notas:** cada uno elige su nombre y vota una vez por partido desde su celular. Puede cambiar su voto, pero nadie se pone nota a sí mismo.
 - **Dorsales:** no se repiten. El número de cada jugador solo lo puede cambiar el celular que lo eligió.
+
+### Votaciones de los Chancha Awards
+
+- En Chancha Awards → **Votaciones**, tocá **Admin** y entrá con tu PIN. Después tocá **Nueva votación** y elegí si se vota **a una persona** o **a una dupla**.
+- Cada uno toca **Votar**, elige su nombre y vota. Nunca puede votarse a sí mismo ni estar en la dupla que vota, y vota una vez por votación, aunque puede cambiar su voto mientras siga abierta.
+- Mientras está abierta solo se ve cuántos votaron y quiénes faltan. Los votos son secretos.
+- Cuando la cerrás (**Cerrar y ver resultados**) aparecen el ganador y las **Estadísticas**. Si hay empate, ganan todos los empatados.
 
 ### Cómo funciona la votación de clips
 
@@ -72,5 +81,5 @@ Asistencia → **Entrar como admin** (PIN 6767) → **Registrar juntada** o **Ag
 
 - `js/data.js`: fútbol, torneos, premios y textos.
 - `js/asistencia.js`: asistencia. Lo genera el admin desde la web.
-- `js/config.js`: conexión a Supabase para los clips.
+- `js/config.js`: conexión a Supabase (asistencia, fútbol, premios, votaciones y clips).
 - `css/tokens.css`: colores, tipografías y espacios. Si querés cambiar el estilo, tocás solo este archivo.
