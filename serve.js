@@ -9,6 +9,7 @@ const types = {
 http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split("?")[0]);
   if (p.endsWith("/")) p += "index.html";
+  else if (!path.extname(p)) p += ".html"; // URLs limpias: /awards → awards.html (igual que en Vercel)
   const f = path.join(root, p);
   if (!f.startsWith(root)) { res.writeHead(403); return res.end(); }
   fs.readFile(f, (e, b) => {

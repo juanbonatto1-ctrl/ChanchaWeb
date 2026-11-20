@@ -348,10 +348,10 @@
 
   /* ================= piezas comunes ================= */
   var NAV = [
-    { id: "inicio", href: "index.html", label: "Inicio" },
-    { id: "asistencia", href: "asistencia.html", label: "Asistencia" },
-    { id: "futbol", href: "futbol.html", label: "Fútbol" },
-    { id: "awards", href: "awards.html", label: '<span class="nav-long">Chancha </span>Awards' }
+    { id: "inicio", href: "/", label: "Inicio" },
+    { id: "asistencia", href: "/asistencia", label: "Asistencia" },
+    { id: "futbol", href: "/futbol", label: "Fútbol" },
+    { id: "awards", href: "/awards", label: '<span class="nav-long">Chancha </span>Awards' }
   ];
 
   function header() {
@@ -361,7 +361,7 @@
     return (
       '<header class="site-header">' +
         '<div class="wrap header-inner">' +
-          '<a class="brand" href="index.html" aria-label="La Chancha — Inicio">' + crest() +
+          '<a class="brand" href="/" aria-label="La Chancha — Inicio">' + crest() +
             '<span class="brand-text"><span class="brand-kicker">Club Social y Deportivo</span><span class="brand-name">La Chancha</span></span>' +
           "</a>" +
           '<nav class="nav" aria-label="Principal">' + links + "</nav>" +
@@ -451,7 +451,7 @@
       ]) + "</div>";
 
     var banner = t
-      ? '<a class="champ-banner" href="futbol.html#campeones">' +
+      ? '<a class="champ-banner" href="/futbol#campeones">' +
           '<div class="champ-banner-copa">' + copa() + "</div>" +
           '<div class="champ-banner-text"><p class="label">Campeones ' + t.anio + '</p><p class="champ-banner-title">' + esc(t.nombre) +
           '</p><p class="champ-banner-desc">' + esc(t.detalle) + '</p><span class="more ulink">Ver la copa →</span></div>' +
@@ -460,9 +460,9 @@
       : "";
 
     var secciones = [
-      { href: "asistencia.html", title: "Asistencia", desc: "Padrón de socios, juntadas y carnets" },
-      { href: "futbol.html", title: "Fútbol", desc: "Partido de la semana, notas, estadísticas y plantel" },
-      { href: "awards.html", title: "Chancha Awards", desc: "Categorías del año y Clip del año" }
+      { href: "/asistencia", title: "Asistencia", desc: "Padrón de socios, juntadas y carnets" },
+      { href: "/futbol", title: "Fútbol", desc: "Partido de la semana, notas, estadísticas y plantel" },
+      { href: "/awards", title: "Chancha Awards", desc: "Categorías del año y Clip del año" }
     ];
     var index = '<ul class="index-list">' + secciones.map(function (s, i) {
       return (
@@ -476,7 +476,7 @@
     return (
       hero +
       (banner ? section(++n, "Campeones", banner, asideLabel("Palmarés")) : "") +
-      section(++n, "Cuadro de honor de juntadas", honor() + '<a class="more ulink" href="asistencia.html">Ver padrón completo →</a>', asideLabel("Asistencia " + D.club.temporada)) +
+      section(++n, "Cuadro de honor de juntadas", honor() + '<a class="more ulink" href="/asistencia">Ver padrón completo →</a>', asideLabel("Asistencia " + D.club.temporada)) +
       section(++n, "Secretaría", index)
     );
   }
